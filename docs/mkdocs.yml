@@ -21,6 +21,7 @@ nav:
   - Tools Reference: tools/index.md
   - Skills Reference: skills/index.md
   - Architecture Guide: architecture/index.md
+  - Observability: observability.md
   - Contributing: contributing.md
   - Troubleshooting: troubleshooting.md
 

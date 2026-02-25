@@ -31,9 +31,13 @@ spec:
             - name: CLUSTER_NAME
               value: {{ .Values.config.clusterName | quote }}
             - name: OTEL_ENABLED
-              value: {{ .Values.config.otel.enabled | quote }}
-            - name: OTEL_ENDPOINT
-              value: {{ .Values.config.otel.endpoint | quote }}
+              value: {{ .Values.otel.enabled | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ .Values.otel.insecure | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.otel.serviceName | default (include "otel-collector-mcp.fullname" .) | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

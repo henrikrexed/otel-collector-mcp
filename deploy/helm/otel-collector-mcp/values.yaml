@@ -10,9 +10,12 @@ port: 8080
 config:
   clusterName: ""
   logLevel: info
-  otel:
-    enabled: false
-    endpoint: ""
+
+otel:
+  enabled: false
+  endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  insecure: true
+  serviceName: ""
 
 securityContext:
   runAsNonRoot: true

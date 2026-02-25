@@ -41,12 +41,17 @@ func NewFromEnv() *Config {
 		}
 	}
 
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = os.Getenv("OTEL_ENDPOINT")
+	}
+
 	return &Config{
 		Port:         port,
 		LogLevel:     logLevel,
 		ClusterName:  os.Getenv("CLUSTER_NAME"),
 		OTelEnabled:  otelEnabled,
-		OTelEndpoint: os.Getenv("OTEL_ENDPOINT"),
+		OTelEndpoint: otelEndpoint,
 	}
 }
 
