@@ -1,5 +1,5 @@
 # Binaries
-otel-collector-mcp
+/otel-collector-mcp
 *.exe
 *.dll
 *.so

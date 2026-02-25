@@ -1,0 +1,40 @@
+image:
+  repository: ghcr.io/hrexed/otel-collector-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+port: 8080
+
+config:
+  clusterName: ""
+  logLevel: info
+  otel:
+    enabled: false
+    endpoint: ""
+
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+gateway:
+  enabled: false
+  className: ""
+  hostname: ""
+  port: 8080
+  tls:
+    enabled: false
+    certificateRef:
+      name: ""
+      namespace: ""
+  annotations: {}
