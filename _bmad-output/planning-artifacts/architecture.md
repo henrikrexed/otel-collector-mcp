@@ -9,7 +9,7 @@ lastStep: 8
 status: 'complete'
 completedAt: '2026-02-25'
 updatedAt: '2026-02-25'
-updateNotes: 'Added ADR-010 (Multi-Cluster Identity), ADR-011 (Gateway API HTTPRoute), ADR-012 (CI/CD Pipeline). Updated project structure with docs/, .github/workflows/, httproute.yaml. Updated FR coverage to 54 FRs.'
+updateNotes: 'Added ADR-013 (OTel GenAI + MCP Semantic Conventions). Updated project structure: tracer.go → telemetry.go + metrics.go. Updated FR coverage to 62 FRs (added FR-OTel-1 to FR-OTel-8).'
 classification:
   projectType: developer_tool
   domain: observability_infrastructure
@@ -26,13 +26,14 @@ _otel-collector-mcp — An MCP server for OpenTelemetry Collector troubleshootin
 ### Requirements Overview
 
 **Functional Requirements:**
-54 FRs organized into 10 capability areas:
+62 FRs organized into 11 capability areas:
 - **Collector Discovery & Detection** (FR1-FR4): Auto-detect deployment types, list collectors, retrieve configs, identify versions
 - **Triage & Diagnosis** (FR5-FR20): Triage scan, log parsing, 12 misconfig detection rules
 - **Remediation** (FR21-FR23): Config fix generation, corrected YAML output, impact explanations
 - **Architecture Design Guidance** (FR24-FR27): Topology recommendations, opinionated rationale, skeleton config generation
 - **OTTL Transform Generation** (FR28-FR31): Log parsing, span manipulation, metric operations, complete config blocks
 - **Infrastructure & Deployment** (FR32-FR38): Helm deployment, health endpoints, structured logging, self-instrumentation, Gateway API HTTPRoute, configurable gateway provider, SecurityContext
+- **OTel Self-Instrumentation** (FR-OTel-1 to FR-OTel-8): MCP semantic convention spans, context propagation from _meta, GenAI metrics, custom domain metrics, slog→OTel log bridge, sanitized span attributes, error.type handling, OTLP gRPC export of all 3 signals
 - **Multi-Cluster Identity** (FR39-FR41): Cluster identification in every response, configurable cluster name
 - **CI/CD Pipeline** (FR42-FR48): Go build (multi-arch), unit/integration tests, Docker multi-arch image, security scanning (Trivy/gosec/govulncheck), linting, MkDocs deployment
 - **User-Facing Documentation** (FR49-FR54): MkDocs site with Getting Started, Tool Reference, Skills Reference, Architecture Guide, Contributing Guide, Troubleshooting Guide
@@ -62,7 +63,7 @@ _otel-collector-mcp — An MCP server for OpenTelemetry Collector troubleshootin
 
 - **Error handling**: Graceful degradation when RBAC is insufficient or API is unreachable
 - **Structured logging**: slog JSON handler throughout, consistent with sibling project
-- **Telemetry**: OTel SDK traces and metrics on all tool invocations
+- **Telemetry**: OTel SDK traces, metrics, and logs on all tool invocations following GenAI + MCP semantic conventions (ADR-013)
 - **Config parsing**: OTel Collector YAML config must be parsed into structured types for analysis
 - **Log streaming**: Pod log access via client-go for both collector and Operator pods
 
@@ -318,6 +319,43 @@ gateway:
 
 **Consequences:** Contributors need no local CI tooling — all checks run in GitHub Actions. Docker image is published to GitHub Container Registry (ghcr.io). MkDocs site is hosted on GitHub Pages.
 
+### ADR-013: OTel GenAI + MCP Semantic Conventions for Self-Instrumentation
+
+**Decision:** Implement full self-instrumentation following the OTel GenAI and MCP semantic conventions (`opentelemetry.io/docs/specs/semconv/gen-ai/mcp/`). Replace `pkg/telemetry/tracer.go` with `pkg/telemetry/telemetry.go` that initializes all 3 OTel signals (traces, metrics, logs). Add `pkg/telemetry/metrics.go` for metric instruments. Instrument the MCP server's tool dispatch path in `pkg/mcp/server.go`.
+
+**Rationale:** The MCP server is an OpenTelemetry tool — it should dogfood OTel. The OTel spec now defines MCP-specific semantic conventions under the GenAI namespace. Following these conventions ensures that traces, metrics, and logs produced by the MCP server are interoperable with any OTel-compatible backend and can be correlated with upstream AI agent telemetry via context propagation from `params._meta`.
+
+**Span conventions:**
+- **Span name**: `{mcp.method.name} {gen_ai.tool.name}` (e.g., `tools/call triage_scan`)
+- **SpanKind**: `SERVER`
+- **Required attributes**: `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.operation.name="execute_tool"`, `mcp.protocol.version="2025-06-18"`
+- **Recommended attributes**: `mcp.session.id`, `jsonrpc.request.id`, `jsonrpc.protocol.version="2.0"`, `network.transport="tcp"`, `server.address`, `server.port`
+- **Opt-in attributes**: `gen_ai.tool.call.arguments` (sanitized, 1KB max), `gen_ai.tool.call.result` (truncated)
+- **Error handling**: `error.type` set to JSON-RPC error code or `tool_error`; `span.SetStatus(codes.Error)`
+
+**Context propagation:**
+Extract `traceparent`/`tracestate` from MCP request `params._meta` using `propagation.MapCarrier`, enabling end-to-end traces from AI agent → MCP server → K8s API.
+
+**Metrics:**
+- `gen_ai.server.request.duration` (Float64Histogram) — tool execution latency
+- `gen_ai.server.request.count` (Int64Counter) — tool invocations by tool name and error type
+- `mcp.findings.total` (Int64Counter) — diagnostic findings by severity and analyzer
+- `mcp.collectors.discovered` (Int64Gauge) — number of discovered collectors
+- `mcp.errors.total` (Int64Counter) — error count by type
+
+**Logs:**
+- Bridge `slog` to OTel via `otelslog.NewHandler` with a tee handler (stdout JSON + OTel export)
+- Automatic `trace_id`/`span_id` correlation in exported logs
+
+**Implementation:**
+- `pkg/telemetry/telemetry.go`: `InitTelemetry(ctx, enabled, endpoint) (func(), error)` — sets up TracerProvider, MeterProvider, LoggerProvider, W3C propagator
+- `pkg/telemetry/metrics.go`: `Metrics` struct with all instruments, `NewMetrics() *Metrics`
+- `pkg/mcp/server.go`: Instrumented `handleMCP` with span creation, metric recording, context extraction from `_meta`
+- `pkg/config/config.go`: `SlogLevel() slog.Level` method for log bridge setup
+- `cmd/server/main.go`: Replace `InitTracer` with `InitTelemetry`, add log bridge setup
+
+**Consequences:** Self-instrumentation adds ~5 new Go dependencies (metric/log exporters, log bridge). Traces are only exported when `OTEL_ENABLED=true`. The telemetry overhead is negligible for the MCP server's request volume. All existing tool behavior is unchanged — instrumentation is purely additive.
+
 ### Decision Priority Analysis
 
 **Critical Decisions (Block Implementation):**
@@ -334,6 +372,7 @@ gateway:
 - ADR-008: Tools vs Prompts boundary
 - ADR-011: Gateway API exposure via HTTPRoute
 - ADR-012: CI/CD pipeline architecture (GitHub Actions)
+- ADR-013: OTel GenAI + MCP semantic conventions for self-instrumentation
 
 **Deferred Decisions (Post-MVP):**
 - ADR-007: zpages access strategy (v2)
@@ -508,7 +547,8 @@ otel-collector-mcp/
 │   │   ├── skill_ottl.go              # OTTL transform generation
 │   │   └── *_test.go
 │   ├── telemetry/                      # OpenTelemetry self-instrumentation
-│   │   └── tracer.go                   # InitTracer with optional OTLP gRPC export
+│   │   ├── telemetry.go                # InitTelemetry: TracerProvider, MeterProvider, LoggerProvider, slog bridge
+│   │   └── metrics.go                  # Metrics struct: GenAI + MCP metric instruments
 │   ├── tools/                          # MCP tool implementations
 │   │   ├── registry.go                 # Thread-safe tool registry
 │   │   ├── types.go                    # Tool interface, BaseTool, StandardResponse
@@ -606,7 +646,8 @@ MCP Client → /mcp endpoint → MCP Server → Tool Registry → Tool.Run()
 | Remediation (FR21-FR23) | `pkg/analysis/` | Embedded in each `analyzer_*.go` |
 | Architecture Design (FR24-FR27) | `pkg/skills/` | `skill_architecture.go` |
 | OTTL Generation (FR28-FR31) | `pkg/skills/` | `skill_ottl.go` |
-| Infrastructure & Deployment (FR32-FR38) | `cmd/server/`, `deploy/helm/`, `pkg/telemetry/` | `main.go`, Helm chart, `httproute.yaml`, `tracer.go` |
+| Infrastructure & Deployment (FR32-FR38) | `cmd/server/`, `deploy/helm/`, `pkg/telemetry/` | `main.go`, Helm chart, `httproute.yaml`, `telemetry.go` |
+| OTel Self-Instrumentation (FR-OTel-1 to FR-OTel-8) | `pkg/telemetry/`, `pkg/mcp/`, `cmd/server/` | `telemetry.go`, `metrics.go`, `server.go`, `main.go` |
 | Multi-Cluster Identity (FR39-FR41) | `pkg/config/`, `pkg/types/` | `config.go` (ClusterName), `metadata.go` (StandardResponse) |
 | CI/CD Pipeline (FR42-FR48) | `.github/workflows/` | `ci.yml`, `docker.yml`, `docs.yml`, `release.yml` |
 | User-Facing Documentation (FR49-FR54) | `docs/` | `mkdocs.yml`, `getting-started.md`, `tools/`, `skills/`, `architecture/`, `contributing.md`, `troubleshooting.md` |
@@ -650,11 +691,12 @@ The `pkg/` directory structure separates concerns cleanly: `analysis/` (detectio
 - FR24-FR27 (Architecture): `pkg/skills/skill_architecture.go`
 - FR28-FR31 (OTTL): `pkg/skills/skill_ottl.go`
 - FR32-FR38 (Infrastructure & Deployment): `cmd/server/main.go`, Helm chart (incl. `httproute.yaml`), `pkg/telemetry/`, `pkg/config/`
+- FR-OTel-1 to FR-OTel-8 (OTel Self-Instrumentation): `pkg/telemetry/telemetry.go`, `pkg/telemetry/metrics.go`, `pkg/mcp/server.go`, `cmd/server/main.go`
 - FR39-FR41 (Multi-Cluster Identity): `pkg/config/config.go` (ClusterName), `pkg/types/metadata.go` (StandardResponse with cluster fields)
 - FR42-FR48 (CI/CD Pipeline): `.github/workflows/ci.yml`, `docker.yml`, `docs.yml`, `release.yml`
 - FR49-FR54 (Documentation): `docs/` MkDocs site with all required pages
 
-All 54 FRs are covered.
+All 62 FRs are covered (54 original + 8 OTel self-instrumentation).
 
 **Non-Functional Requirements Coverage:**
 - Performance: Bounded log parsing (TailLines), stateless tools, no heavy computation
@@ -680,7 +722,7 @@ All 54 FRs are covered.
 - [x] Cross-cutting concerns mapped (error handling, logging, telemetry, config parsing)
 
 **Architectural Decisions**
-- [x] 12 ADRs documented with rationale and consequences
+- [x] 13 ADRs documented with rationale and consequences
 - [x] Technology stack fully specified with versions
 - [x] Integration patterns defined (Kubernetes API, MCP, OTel, sibling MCP, Gateway API)
 - [x] Performance considerations addressed (bounded inputs, stateless design)

@@ -92,3 +92,11 @@ development_status:
   7-4-architecture-guide-documentation: done
   7-5-contributing-guide-and-troubleshooting-documentation: done
   epic-7-retrospective: optional
+
+  epic-8: done
+  8-1-unified-telemetry-initialization: done
+  8-2-genai-and-custom-metric-instruments: done
+  8-3-mcp-server-span-instrumentation: done
+  8-4-context-propagation-from-mcp-meta: done
+  8-5-slog-otel-log-bridge: done
+  epic-8-retrospective: optional

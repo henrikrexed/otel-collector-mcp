@@ -68,6 +68,20 @@ func (c *Config) SetupLogging() {
 	slog.SetDefault(slog.New(handler))
 }
 
+// SlogLevel returns the configured slog.Level for use with OTel log bridge setup.
+func (c *Config) SlogLevel() slog.Level {
+	switch c.LogLevel {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // ClusterMetadata returns the ClusterMetadata for use in StandardResponse.
 func (c *Config) ClusterMetadata() types.ClusterMetadata {
 	ns := os.Getenv("POD_NAMESPACE")

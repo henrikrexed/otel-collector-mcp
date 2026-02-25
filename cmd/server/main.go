@@ -31,13 +31,18 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// Initialize OpenTelemetry tracing
-	_, shutdown, err := telemetry.InitTracer(ctx, cfg.OTelEnabled, cfg.OTelEndpoint)
+	// Initialize OpenTelemetry (traces, metrics, logs)
+	shutdown, err := telemetry.InitTelemetry(ctx, cfg.OTelEnabled, cfg.OTelEndpoint)
 	if err != nil {
-		slog.Error("failed to initialize tracer", "error", err)
+		slog.Error("failed to initialize telemetry", "error", err)
 		os.Exit(1)
 	}
 	defer shutdown()
+
+	// Reconfigure slog with OTel log bridge (tee: stdout + OTel export)
+	if cfg.OTelEnabled {
+		telemetry.SetupOTelLogging(cfg.SlogLevel())
+	}
 
 	// Initialize Kubernetes clients
 	clients, err := k8s.NewClients()
@@ -85,7 +90,7 @@ func main() {
 	go watcher.Start(ctx)
 
 	// Create and start MCP server
-	mcpServer := mcp.NewServer(registry, watcher.Features().IsReady)
+	mcpServer := mcp.NewServer(registry, watcher.Features().IsReady, cfg.Port)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	if err := mcpServer.ListenAndServe(ctx, addr); err != nil {

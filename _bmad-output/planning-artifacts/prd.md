@@ -379,7 +379,18 @@ Each proactive capability is exposed as an MCP prompt/resource with:
 - FR32: MCP server can be deployed in-cluster via Helm chart with configurable RBAC, namespace scope, resource limits, and replica count
 - FR33: MCP server exposes health and readiness endpoints for Kubernetes liveness/readiness probes
 - FR34: MCP server emits structured logs (slog) with configurable log level
-- FR35: MCP server instruments itself with OpenTelemetry SDK (traces and metrics) for observability
+- FR35: MCP server instruments itself with OpenTelemetry SDK (traces, metrics, and logs) for observability
+
+### OTel Self-Instrumentation (GenAI + MCP Semantic Conventions)
+
+- FR-OTel-1: All MCP tool calls MUST produce spans following the OTel MCP semantic conventions (`mcp.method.name`, `gen_ai.tool.name`, `gen_ai.operation.name="execute_tool"`, `mcp.protocol.version`, `mcp.session.id`, `jsonrpc.request.id`)
+- FR-OTel-2: Context propagation — extract `traceparent`/`tracestate` from MCP request `params._meta` to enable end-to-end traces from AI agent → MCP server → K8s API
+- FR-OTel-3: GenAI metrics following semconv: `gen_ai.server.request.duration` histogram, `gen_ai.server.request.count` counter (by tool name, error type)
+- FR-OTel-4: Custom domain metrics: `mcp.findings.total` (by severity, analyzer), `mcp.collectors.discovered` gauge, `mcp.errors.total` counter
+- FR-OTel-5: Structured logging via OTel log bridge (`slog` → OTel logs with `trace_id`/`span_id` correlation)
+- FR-OTel-6: Span attributes must include `gen_ai.tool.call.arguments` (sanitized) and `gen_ai.tool.call.result` (truncated)
+- FR-OTel-7: Error spans must set `error.type` to JSON-RPC error code or `tool_error` when `isError=true`
+- FR-OTel-8: All 3 OTel signals (traces, metrics, logs) exported via OTLP gRPC
 - FR36: Helm chart exposes the MCP server via Gateway API HTTPRoute resource
 - FR37: Helm chart supports configurable gateway provider (Istio, Envoy Gateway, Cilium, NGINX, kgateway) as a chart variable
 - FR38: Helm chart includes configurable SecurityContext (runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation: false)

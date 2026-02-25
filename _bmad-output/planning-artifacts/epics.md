@@ -73,6 +73,14 @@ This document provides the complete epic and story breakdown for otel-collector-
 - FR52: MkDocs documentation site includes an Architecture Guide covering deployment patterns, multi-cluster setup, and Gateway API exposure
 - FR53: MkDocs documentation site includes a Contributing Guide for adding detection rules, skills, and documentation
 - FR54: MkDocs documentation site includes a Troubleshooting Guide for common installation and connectivity issues
+- FR-OTel-1: All MCP tool calls MUST produce spans following the OTel MCP semantic conventions
+- FR-OTel-2: Context propagation — extract traceparent/tracestate from MCP request params._meta
+- FR-OTel-3: GenAI metrics following semconv: gen_ai.server.request.duration, gen_ai.server.request.count
+- FR-OTel-4: Custom domain metrics: mcp.findings.total, mcp.collectors.discovered, mcp.errors.total
+- FR-OTel-5: Structured logging via OTel log bridge (slog → OTel logs with trace_id/span_id correlation)
+- FR-OTel-6: Span attributes must include gen_ai.tool.call.arguments (sanitized) and gen_ai.tool.call.result (truncated)
+- FR-OTel-7: Error spans must set error.type to JSON-RPC error code or tool_error
+- FR-OTel-8: All 3 OTel signals (traces, metrics, logs) exported via OTLP gRPC
 
 ### NonFunctional Requirements
 
@@ -167,6 +175,14 @@ FR51: Epic 7 — Skills Reference
 FR52: Epic 7 — Architecture Guide
 FR53: Epic 7 — Contributing Guide
 FR54: Epic 7 — Troubleshooting Guide
+FR-OTel-1: Epic 8 — MCP semantic convention spans
+FR-OTel-2: Epic 8 — Context propagation from _meta
+FR-OTel-3: Epic 8 — GenAI metrics (duration, count)
+FR-OTel-4: Epic 8 — Custom domain metrics
+FR-OTel-5: Epic 8 — slog→OTel log bridge
+FR-OTel-6: Epic 8 — Sanitized span attributes
+FR-OTel-7: Epic 8 — Error span handling
+FR-OTel-8: Epic 8 — OTLP gRPC export of all 3 signals
 
 ## Epic List
 
@@ -197,6 +213,10 @@ Contributors have a complete GitHub Actions pipeline that builds, tests, lints, 
 ### Epic 7: Documentation Site
 Users and contributors have a comprehensive MkDocs documentation site with getting started, tool/skill reference, architecture guide, contributing guide, and troubleshooting.
 **FRs covered:** FR49, FR50, FR51, FR52, FR53, FR54
+
+### Epic 8: OTel Self-Instrumentation (GenAI + MCP Semantic Conventions)
+The MCP server instruments itself with full OpenTelemetry observability (traces, metrics, logs) following the official OTel GenAI and MCP semantic conventions, enabling end-to-end trace correlation from AI agents through tool execution to Kubernetes API calls.
+**FRs covered:** FR-OTel-1, FR-OTel-2, FR-OTel-3, FR-OTel-4, FR-OTel-5, FR-OTel-6, FR-OTel-7, FR-OTel-8
 
 ---
 
@@ -841,3 +861,104 @@ So that I can add detection rules and skills, and debug common installation issu
 **Then** it covers common installation issues (RBAC errors, pod not starting, CRD discovery failures) (FR54)
 **And** it covers connectivity issues (MCP client can't connect, Gateway API routing, TLS) (FR54)
 **And** it includes diagnostic steps for each issue
+
+---
+
+## Epic 8: OTel Self-Instrumentation (GenAI + MCP Semantic Conventions)
+
+The MCP server instruments itself with full OpenTelemetry observability (traces, metrics, logs) following the official OTel GenAI and MCP semantic conventions, enabling end-to-end trace correlation from AI agents through tool execution to Kubernetes API calls.
+
+### Story 8.1: Unified Telemetry Initialization (TracerProvider + MeterProvider + LoggerProvider)
+
+As a platform engineer,
+I want the MCP server to initialize all 3 OTel signal providers (traces, metrics, logs) from a single configuration,
+So that the server exports complete telemetry when OTel is enabled.
+
+**Acceptance Criteria:**
+
+**Given** `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+**When** the server starts
+**Then** it creates a TracerProvider with OTLP gRPC exporter and BatchSpanProcessor (FR-OTel-8)
+**And** it creates a MeterProvider with OTLP gRPC exporter and PeriodicReader (10s interval) (FR-OTel-8)
+**And** it creates a LoggerProvider with OTLP gRPC exporter and BatchProcessor (FR-OTel-8)
+**And** it registers a W3C TraceContext propagator globally
+**And** a single `shutdown()` function cleanly shuts down all 3 providers with a 5s timeout
+**And** `pkg/telemetry/tracer.go` is replaced by `pkg/telemetry/telemetry.go`
+
+**Given** `OTEL_ENABLED=false`
+**When** the server starts
+**Then** it sets a noop TracerProvider (existing behavior)
+**And** MeterProvider and LoggerProvider use SDK defaults (no-ops)
+
+### Story 8.2: GenAI + Custom Metric Instruments
+
+As an observability engineer,
+I want the MCP server to emit GenAI semconv metrics and custom domain metrics,
+So that I can monitor tool performance, error rates, and diagnostic findings.
+
+**Acceptance Criteria:**
+
+**Given** OTel is enabled
+**When** any MCP tool is invoked
+**Then** `gen_ai.server.request.duration` histogram records the tool execution latency in seconds (FR-OTel-3)
+**And** `gen_ai.server.request.count` counter increments with attributes `gen_ai.tool.name` and `error.type` (FR-OTel-3)
+**And** `mcp.findings.total` counter increments per finding with attributes `severity` and `analyzer` (FR-OTel-4)
+**And** `mcp.collectors.discovered` gauge records the number of discovered collectors when `list_collectors` is invoked (FR-OTel-4)
+**And** `mcp.errors.total` counter increments on tool errors (FR-OTel-4)
+**And** all metric instruments are defined in `pkg/telemetry/metrics.go` as a `Metrics` struct
+
+### Story 8.3: MCP Server Span Instrumentation with Semantic Conventions
+
+As an observability engineer,
+I want every MCP tool call to produce a span following the OTel MCP semantic conventions,
+So that traces are interoperable with OTel-compatible backends and correlate with AI agent spans.
+
+**Acceptance Criteria:**
+
+**Given** OTel is enabled and an MCP `tools/call` request arrives
+**When** `handleMCP` dispatches the tool
+**Then** a span is created with name `{mcp.method.name} {gen_ai.tool.name}` (e.g., `tools/call triage_scan`) (FR-OTel-1)
+**And** SpanKind is SERVER (FR-OTel-1)
+**And** required attributes are set: `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.operation.name="execute_tool"`, `mcp.protocol.version="2025-06-18"` (FR-OTel-1)
+**And** recommended attributes are set: `jsonrpc.request.id`, `jsonrpc.protocol.version="2.0"`, `network.transport="tcp"`, `server.address`, `server.port` (FR-OTel-1)
+**And** opt-in attributes `gen_ai.tool.call.arguments` (sanitized, max 1KB) and `gen_ai.tool.call.result` (truncated) are set (FR-OTel-6)
+**And** on error, `error.type` is set and span status is ERROR (FR-OTel-7)
+**And** diagnostic findings are recorded as span events with severity, category, and summary
+
+### Story 8.4: Context Propagation from MCP _meta
+
+As an AI platform engineer,
+I want the MCP server to extract trace context from the MCP request `params._meta` field,
+So that spans produced by the server are linked to the AI agent's trace, enabling end-to-end distributed tracing.
+
+**Acceptance Criteria:**
+
+**Given** an MCP request includes `params._meta` with `traceparent` and/or `tracestate` headers
+**When** the server processes the request
+**Then** it extracts the trace context using `propagation.MapCarrier` (FR-OTel-2)
+**And** the server span becomes a child of the upstream trace
+**And** downstream K8s API calls inherit the propagated context
+**And** the `mcpParams` struct includes a `Meta map[string]interface{}` field with JSON tag `_meta,omitempty`
+
+**Given** an MCP request does NOT include `params._meta`
+**When** the server processes the request
+**Then** a new root span is created (no error or fallback behavior)
+
+### Story 8.5: slog → OTel Log Bridge with Trace Correlation
+
+As an observability engineer,
+I want application logs to be exported via the OTel log pipeline with trace_id/span_id correlation,
+So that I can correlate log entries with specific tool execution traces in my backend.
+
+**Acceptance Criteria:**
+
+**Given** OTel is enabled
+**When** the server starts
+**Then** slog is reconfigured with a tee handler that writes to both stdout (JSON) and OTel log bridge (FR-OTel-5)
+**And** the OTel log bridge uses `otelslog.NewHandler` from `go.opentelemetry.io/contrib/bridges/otelslog`
+**And** log entries within a span context automatically include `trace_id` and `span_id` correlation fields
+**And** `pkg/config/config.go` exposes a `SlogLevel() slog.Level` method for log bridge setup
+
+**Given** OTel is disabled
+**When** the server starts
+**Then** slog continues to write to stdout only (existing behavior unchanged)
