@@ -622,19 +622,18 @@ otel-collector-mcp/
 - `cmd/server/` → depends on all `pkg/` packages (composition root)
 
 **Data Flow:**
-```
-MCP Client → /mcp endpoint → MCP Server → Tool Registry → Tool.Run()
-                                                              ↓
-                                              ┌───────────────┴───────────────┐
-                                              ↓                               ↓
-                                    pkg/collector/              pkg/analysis/
-                                    (config parsing,            (detection rules)
-                                     log streaming,                   ↓
-                                     deployment detection)     DiagnosticFinding[]
-                                              ↓                       ↓
-                                    Kubernetes API              StandardResponse
-                                    (client-go)                       ↓
-                                                               MCP Client
+```mermaid
+flowchart TD
+    Client[MCP Client] --> EP["/mcp endpoint"]
+    EP --> Server[MCP Server]
+    Server --> Registry[Tool Registry]
+    Registry --> Run["Tool.Run()"]
+    Run --> Collector["pkg/collector/\n(config parsing,\nlog streaming,\ndeployment detection)"]
+    Run --> Analysis["pkg/analysis/\n(detection rules)"]
+    Collector --> K8s["Kubernetes API\n(client-go)"]
+    Analysis --> Findings["DiagnosticFinding[]"]
+    Findings --> Response[StandardResponse]
+    Response --> Client
 ```
 
 ### Requirements to Structure Mapping

@@ -14,19 +14,26 @@ A DaemonSet runs one collector pod per node. This is the standard pattern for:
 - **Host metrics** -- Node-level CPU, memory, disk, and network metrics via the `hostmetrics` receiver.
 - **Low-overhead OTLP reception** -- Accepting telemetry from application pods on the same node over localhost.
 
-```
-  Node 1                Node 2                Node 3
-+-----------------+  +-----------------+  +-----------------+
-| App Pod A       |  | App Pod C       |  | App Pod E       |
-| App Pod B       |  | App Pod D       |  | App Pod F       |
-|                 |  |                 |  |                 |
-| OTel Agent Pod  |  | OTel Agent Pod  |  | OTel Agent Pod  |
-| (DaemonSet)     |  | (DaemonSet)     |  | (DaemonSet)     |
-+---------+-------+  +---------+-------+  +---------+-------+
-          |                    |                    |
-          +--------------------+--------------------+
-                               |
-                         Backend / OTLP
+```mermaid
+flowchart TD
+    subgraph Node1["Node 1"]
+        A1[App Pod A]
+        A2[App Pod B]
+        D1[OTel Agent Pod\nDaemonSet]
+    end
+    subgraph Node2["Node 2"]
+        A3[App Pod C]
+        A4[App Pod D]
+        D2[OTel Agent Pod\nDaemonSet]
+    end
+    subgraph Node3["Node 3"]
+        A5[App Pod E]
+        A6[App Pod F]
+        D3[OTel Agent Pod\nDaemonSet]
+    end
+    D1 --> Backend[Backend / OTLP]
+    D2 --> Backend
+    D3 --> Backend
 ```
 
 **When to use:** Log collection, host metrics, or simple per-node trace/metric forwarding with no need for centralized processing.
@@ -39,22 +46,20 @@ A Deployment runs a configurable number of replicas behind a Kubernetes Service.
 - **Multi-backend fan-out** -- Routing signals to multiple backends (e.g., Jaeger + Datadog).
 - **Centralized processing** -- OTTL transforms, filtering, and enrichment that benefit from centralized management.
 
-```
-  Node 1              Node 2
-+---------------+  +---------------+
-| App Pods      |  | App Pods      |
-| OTel Agent    |  | OTel Agent    |
-| (DaemonSet)   |  | (DaemonSet)   |
-+-------+-------+  +-------+-------+
-        |                  |
-        +--------+---------+
-                 |
-          OTel Gateway
-          (Deployment)
-        +--------+--------+
-        |                 |
-   Backend A         Backend B
-  (Jaeger)           (Datadog)
+```mermaid
+flowchart TD
+    subgraph Node1["Node 1"]
+        AP1[App Pods]
+        AG1[OTel Agent\nDaemonSet]
+    end
+    subgraph Node2["Node 2"]
+        AP2[App Pods]
+        AG2[OTel Agent\nDaemonSet]
+    end
+    AG1 --> GW[OTel Gateway\nDeployment]
+    AG2 --> GW
+    GW --> BA["Backend A (Jaeger)"]
+    GW --> BB["Backend B (Datadog)"]
 ```
 
 **When to use:** Tail sampling, multi-backend fan-out, centralized OTTL transforms, or when you need horizontally-scaled processing.
@@ -80,31 +85,28 @@ otel-collector-mcp auto-detects operator-managed collectors by checking for the 
 
 The most common production pattern combines DaemonSet agents with a centralized gateway:
 
-```
-+------------------------------------------------------------------+
-|                        Kubernetes Cluster                        |
-|                                                                  |
-|  Node 1             Node 2             Node 3                    |
-|  +-------------+    +-------------+    +-------------+           |
-|  | App Pods    |    | App Pods    |    | App Pods    |           |
-|  |             |    |             |    |             |           |
-|  | OTel Agent  |    | OTel Agent  |    | OTel Agent  |           |
-|  | (DaemonSet) |    | (DaemonSet) |    | (DaemonSet) |           |
-|  +------+------+    +------+------+    +------+------+           |
-|         |                  |                  |                   |
-|         +------------------+------------------+                   |
-|                            |                                     |
-|                   +--------+--------+                            |
-|                   |  OTel Gateway   |                            |
-|                   |  (Deployment)   |                            |
-|                   |  - tail_sample  |                            |
-|                   |  - transform    |                            |
-|                   |  - batch        |                            |
-|                   +---+--------+----+                            |
-|                       |        |                                 |
-+------------------------------------------------------------------+
-                        |        |
-                   Backend A  Backend B
+```mermaid
+flowchart TD
+    subgraph Cluster["Kubernetes Cluster"]
+        subgraph N1["Node 1"]
+            P1[App Pods]
+            A1[OTel Agent\nDaemonSet]
+        end
+        subgraph N2["Node 2"]
+            P2[App Pods]
+            A2[OTel Agent\nDaemonSet]
+        end
+        subgraph N3["Node 3"]
+            P3[App Pods]
+            A3[OTel Agent\nDaemonSet]
+        end
+        GW["OTel Gateway (Deployment)\ntail_sample · transform · batch"]
+        A1 --> GW
+        A2 --> GW
+        A3 --> GW
+    end
+    GW --> BA[Backend A]
+    GW --> BB[Backend B]
 ```
 
 The DaemonSet agents handle:
@@ -125,19 +127,20 @@ The Gateway handles:
 
 In a multi-cluster environment, deploy one otel-collector-mcp instance per cluster. Each instance operates independently with its own Kubernetes ServiceAccount and RBAC permissions.
 
-```
-+---------------------+    +---------------------+    +---------------------+
-|  Cluster: us-east   |    |  Cluster: eu-west   |    |  Cluster: ap-south  |
-|                     |    |                     |    |                     |
-|  otel-collector-mcp |    |  otel-collector-mcp |    |  otel-collector-mcp |
-|  CLUSTER_NAME=      |    |  CLUSTER_NAME=      |    |  CLUSTER_NAME=      |
-|  "us-east"          |    |  "eu-west"          |    |  "ap-south"         |
-+----------+----------+    +----------+----------+    +----------+----------+
-           |                          |                          |
-           +--------------------------+--------------------------+
-                                      |
-                               AI Assistant
-                          (Claude Desktop, etc.)
+```mermaid
+flowchart TD
+    subgraph C1["Cluster: us-east"]
+        M1["otel-collector-mcp\nCLUSTER_NAME=us-east"]
+    end
+    subgraph C2["Cluster: eu-west"]
+        M2["otel-collector-mcp\nCLUSTER_NAME=eu-west"]
+    end
+    subgraph C3["Cluster: ap-south"]
+        M3["otel-collector-mcp\nCLUSTER_NAME=ap-south"]
+    end
+    M1 --> AI["AI Assistant\n(Claude Desktop, etc.)"]
+    M2 --> AI
+    M3 --> AI
 ```
 
 ### Configuration
@@ -198,16 +201,12 @@ The Helm chart includes an optional HTTPRoute resource for exposing the MCP serv
 
 When `gateway.enabled=true`, the chart creates an HTTPRoute that routes HTTP traffic from a Gateway resource to the otel-collector-mcp Service:
 
-```
-External Client
-       |
-   Gateway (Istio/Envoy/Cilium/NGINX/kgateway)
-       |
-   HTTPRoute (otel-collector-mcp)
-       |
-   Service (otel-collector-mcp)
-       |
-   Pod (otel-collector-mcp)
+```mermaid
+flowchart TD
+    EC[External Client] --> GW["Gateway\n(Istio / Envoy / Cilium / NGINX / kgateway)"]
+    GW --> HR[HTTPRoute\notel-collector-mcp]
+    HR --> SVC[Service\notel-collector-mcp]
+    SVC --> POD[Pod\notel-collector-mcp]
 ```
 
 ### Supported Providers
@@ -249,76 +248,37 @@ When TLS is enabled, the HTTPRoute references the `https` section of the parent 
 
 The following diagram shows how data flows through otel-collector-mcp when an AI assistant invokes a tool:
 
-```
-AI Assistant (Claude Desktop)
-       |
-       | HTTP POST /mcp
-       | {"method": "tools/call", "params": {"name": "triage_scan", ...}}
-       |
-       v
-+------+------+
-|  MCP Server |  (HTTP handler at :8080)
-|             |
-|  1. Decode request
-|  2. Look up tool in Registry
-|  3. Invoke tool.Run()
-|             |
-+------+------+
-       |
-       v
-+------+------+
-|  Tool Layer |
-|             |
-|  triage_scan:
-|  a. DetectDeploymentModeWithCRD() ---> K8s API (apps/v1, opentelemetry.io)
-|  b. GetCollectorConfig()          ---> K8s API (ConfigMaps)
-|  c. FetchPodLogs()                ---> K8s API (pods/log)
-|  d. Run all Analyzers             ---> In-memory analysis
-|  e. Sort findings by severity
-|             |
-+------+------+
-       |
-       v
-+------+------+
-|  Response   |
-|  Envelope   |
-|             |
-|  StandardResponse {
-|    cluster, namespace,
-|    timestamp, tool,
-|    data: { findings, metadata }
-|  }
-|             |
-+------+------+
-       |
-       | HTTP 200, JSON body
-       v
-AI Assistant
-  (interprets findings, presents to user)
+```mermaid
+sequenceDiagram
+    participant AI as AI Assistant<br/>(Claude Desktop)
+    participant MCP as MCP Server<br/>(:8080)
+    participant Tool as Tool Layer<br/>(triage_scan)
+    participant K8s as Kubernetes API
+
+    AI->>MCP: HTTP POST /mcp<br/>tools/call triage_scan
+    MCP->>MCP: Decode request<br/>Look up tool in Registry
+    MCP->>Tool: tool.Run(ctx, args)
+    Tool->>K8s: DetectDeploymentModeWithCRD()
+    K8s-->>Tool: apps/v1, opentelemetry.io
+    Tool->>K8s: GetCollectorConfig()
+    K8s-->>Tool: ConfigMap data
+    Tool->>K8s: FetchPodLogs()
+    K8s-->>Tool: Pod log stream
+    Tool->>Tool: Run all Analyzers<br/>Sort findings by severity
+    Tool-->>MCP: DiagnosticFinding[]
+    MCP->>MCP: Wrap in StandardResponse<br/>{cluster, namespace, timestamp, tool, data}
+    MCP-->>AI: HTTP 200 JSON<br/>Interprets findings
 ```
 
 ### CRD Discovery Flow
 
 On startup and every 30 seconds, the CRD watcher queries the Kubernetes discovery API:
 
-```
-CRD Watcher
-    |
-    | ServerGroupsAndResources()
-    v
-K8s Discovery API
-    |
-    | Scan for:
-    |   - Kind: OpenTelemetryCollector  --> hasOTelOperator = true
-    |   - Kind: TargetAllocator         --> hasTargetAllocator = true
-    v
-Features (thread-safe)
-    |
-    | Used by tools to decide:
-    |   - Whether to check CRD-based collectors
-    |   - Whether to search for operator pods
-    v
-Tool Registry
+```mermaid
+flowchart TD
+    CW[CRD Watcher] -->|ServerGroupsAndResources| K8s[K8s Discovery API]
+    K8s -->|"OpenTelemetryCollector → hasOTelOperator\nTargetAllocator → hasTargetAllocator"| F["Features\n(thread-safe)"]
+    F -->|"Check CRD-based collectors?\nSearch for operator pods?"| TR[Tool Registry]
 ```
 
 This dynamic discovery means otel-collector-mcp adapts automatically when the OTel Operator is installed or removed -- no restart required.
