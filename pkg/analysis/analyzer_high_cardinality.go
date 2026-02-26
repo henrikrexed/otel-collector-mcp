@@ -8,14 +8,6 @@ import (
 	"github.com/hrexed/otel-collector-mcp/pkg/types"
 )
 
-// highCardinalityPatterns are attribute names that commonly produce high cardinality.
-var highCardinalityPatterns = []string{
-	"http.url", "url.full", "http.target",
-	"db.statement", "db.query.text",
-	"user.id", "session.id", "request.id",
-	"ip", "client.address",
-}
-
 // AnalyzeHighCardinality checks for patterns that may produce high-cardinality metric labels.
 func AnalyzeHighCardinality(_ context.Context, input *AnalysisInput) []types.DiagnosticFinding {
 	if input.Config == nil {

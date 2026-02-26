@@ -139,15 +139,15 @@ func generateMetricOTTL(operation string) []string {
 func buildTransformConfig(signalType, context string, statements []string) string {
 	var b strings.Builder
 	b.WriteString("processors:\n")
-	b.WriteString(fmt.Sprintf("  transform/%s_transform:\n", signalType))
-	b.WriteString(fmt.Sprintf("    %s_statements:\n", context))
+	fmt.Fprintf(&b, "  transform/%s_transform:\n", signalType)
+	fmt.Fprintf(&b, "    %s_statements:\n", context)
 	b.WriteString("      - context: " + context + "\n")
 	b.WriteString("        statements:\n")
 	for _, stmt := range statements {
-		b.WriteString(fmt.Sprintf("          - '%s'\n", stmt))
+		fmt.Fprintf(&b, "          - '%s'\n", stmt)
 	}
 
-	b.WriteString(fmt.Sprintf("\nservice:\n  pipelines:\n    %s:\n      processors: [transform/%s_transform]\n", signalType, signalType))
+	fmt.Fprintf(&b, "\nservice:\n  pipelines:\n    %s:\n      processors: [transform/%s_transform]\n", signalType, signalType)
 
 	return b.String()
 }

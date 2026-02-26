@@ -12,15 +12,6 @@ func pipelineHasProcessor(pipeline collector.PipelineConfig, prefix string) bool
 	return false
 }
 
-// getMapKeys returns the keys of a map[string]interface{}.
-func getMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // getNestedMap tries to get a nested map from a parent map.
 func getNestedMap(m map[string]interface{}, key string) (map[string]interface{}, bool) {
 	v, ok := m[key]

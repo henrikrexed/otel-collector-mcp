@@ -153,7 +153,7 @@ func generateSkeletonConfig(components []componentRec, signals, backends []strin
 
 	b.WriteString("exporters:\n")
 	for _, backend := range backends {
-		b.WriteString(fmt.Sprintf("  %s:\n    endpoint: \"<configure-%s-endpoint>\"\n", backend, backend))
+		fmt.Fprintf(&b, "  %s:\n    endpoint: \"<configure-%s-endpoint>\"\n", backend, backend)
 	}
 	if len(backends) == 0 {
 		b.WriteString("  otlp:\n    endpoint: \"<configure-endpoint>\"\n")
@@ -165,8 +165,8 @@ func generateSkeletonConfig(components []componentRec, signals, backends []strin
 		exporterList = "otlp"
 	}
 	for _, sig := range signals {
-		b.WriteString(fmt.Sprintf("    %s:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [%s]\n",
-			sig, exporterList))
+		fmt.Fprintf(&b, "    %s:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [%s]\n",
+			sig, exporterList)
 	}
 
 	return b.String()

@@ -47,7 +47,7 @@ func FetchPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace
 	if err != nil {
 		return nil, fmt.Errorf("failed to stream logs for %s/%s: %w", namespace, podName, err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(stream)

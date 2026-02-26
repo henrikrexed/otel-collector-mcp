@@ -1,17 +1,17 @@
 package config
 
 import (
-	"os"
 	"testing"
 )
 
 func TestNewFromEnvDefaults(t *testing.T) {
 	// Clear env vars for clean test
-	os.Unsetenv("PORT")
-	os.Unsetenv("LOG_LEVEL")
-	os.Unsetenv("CLUSTER_NAME")
-	os.Unsetenv("OTEL_ENABLED")
-	os.Unsetenv("OTEL_ENDPOINT")
+	t.Setenv("PORT", "")
+	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("CLUSTER_NAME", "")
+	t.Setenv("OTEL_ENABLED", "")
+	t.Setenv("OTEL_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 	cfg := NewFromEnv()
 
@@ -30,18 +30,11 @@ func TestNewFromEnvDefaults(t *testing.T) {
 }
 
 func TestNewFromEnvOverrides(t *testing.T) {
-	os.Setenv("PORT", "9090")
-	os.Setenv("LOG_LEVEL", "debug")
-	os.Setenv("CLUSTER_NAME", "prod-us-east")
-	os.Setenv("OTEL_ENABLED", "true")
-	os.Setenv("OTEL_ENDPOINT", "localhost:4317")
-	defer func() {
-		os.Unsetenv("PORT")
-		os.Unsetenv("LOG_LEVEL")
-		os.Unsetenv("CLUSTER_NAME")
-		os.Unsetenv("OTEL_ENABLED")
-		os.Unsetenv("OTEL_ENDPOINT")
-	}()
+	t.Setenv("PORT", "9090")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("CLUSTER_NAME", "prod-us-east")
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_ENDPOINT", "localhost:4317")
 
 	cfg := NewFromEnv()
 
@@ -63,12 +56,8 @@ func TestNewFromEnvOverrides(t *testing.T) {
 }
 
 func TestClusterMetadata(t *testing.T) {
-	os.Setenv("CLUSTER_NAME", "test-cluster")
-	os.Setenv("POD_NAMESPACE", "monitoring")
-	defer func() {
-		os.Unsetenv("CLUSTER_NAME")
-		os.Unsetenv("POD_NAMESPACE")
-	}()
+	t.Setenv("CLUSTER_NAME", "test-cluster")
+	t.Setenv("POD_NAMESPACE", "monitoring")
 
 	cfg := NewFromEnv()
 	meta := cfg.ClusterMetadata()

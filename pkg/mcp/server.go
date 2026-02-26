@@ -70,19 +70,19 @@ func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
-func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ok")
+	_, _ = fmt.Fprint(w, "ok")
 }
 
-func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	if s.ready != nil && !s.ready() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprint(w, "not ready")
+		_, _ = fmt.Fprint(w, "not ready")
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ready")
+	_, _ = fmt.Fprint(w, "ready")
 }
 
 // mcpRequest represents a simplified MCP tool call request.

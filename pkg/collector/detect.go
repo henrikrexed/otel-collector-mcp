@@ -34,14 +34,6 @@ type CollectorInstance struct {
 	Labels         map[string]string `json:"labels,omitempty"`
 }
 
-// Common label selectors used to discover OTel Collector pods.
-var collectorLabelSelectors = []string{
-	"app.kubernetes.io/component=opentelemetry-collector",
-	"app.kubernetes.io/name=opentelemetry-collector",
-	"app=opentelemetry-collector",
-	"component=otel-collector",
-}
-
 // DetectDeploymentMode determines the deployment type of a collector workload.
 func DetectDeploymentMode(ctx context.Context, clientset kubernetes.Interface, namespace, name string) (DeploymentMode, error) {
 	// Check DaemonSet
