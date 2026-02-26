@@ -35,7 +35,7 @@ func NewFromEnv() *Config {
 	if v := os.Getenv("OTEL_ENABLED"); v != "" {
 		parsed, err := strconv.ParseBool(v)
 		if err != nil {
-			slog.Warn("invalid OTEL_ENABLED value, defaulting to false", "value", v, "error", err)
+			slog.Warn("invalid OTEL_ENABLED value, defaulting to false") // #nosec G706
 		} else {
 			otelEnabled = parsed
 		}

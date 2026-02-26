@@ -87,9 +87,9 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 
 // mcpRequest represents a simplified MCP tool call request.
 type mcpRequest struct {
-	JSONRPC string   `json:"jsonrpc"`
-	ID      any      `json:"id"`
-	Method  string   `json:"method"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id"`
+	Method  string    `json:"method"`
 	Params  mcpParams `json:"params"`
 }
 
@@ -319,8 +319,9 @@ func (s *Server) handleToolList(w http.ResponseWriter, _ *http.Request) {
 // ListenAndServe starts the MCP server, blocking until ctx is done.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: s.Handler(),
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
