@@ -62,9 +62,9 @@ jobs:
         with:
           go-version: '1.25'
       - name: Run gosec
-        uses: securego/gosec@v2.22.0
-        with:
-          args: -exclude=G706 ./...
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -exclude=G706 ./...
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
