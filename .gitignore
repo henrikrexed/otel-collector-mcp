@@ -34,3 +34,4 @@ bin/
 # MkDocs build
 docs/site/
 site/
+server
