@@ -36,7 +36,7 @@ Create a `values.yaml` file:
 
 ```yaml
 image:
-  repository: ghcr.io/hrexed/otel-collector-mcp
+  repository: ghcr.io/henrikrexed/otel-collector-mcp
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -46,9 +46,12 @@ port: 8080
 config:
   clusterName: "production-us-east"
   logLevel: info
-  otel:
-    enabled: false
-    endpoint: ""
+
+otel:
+  enabled: false
+  endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  insecure: true
+  serviceName: ""
 
 resources:
   limits:
@@ -96,42 +99,86 @@ The Helm chart creates a ClusterRole with the following permissions:
 
 These are read-only permissions. The MCP server never modifies cluster resources.
 
-## Connecting to an AI Assistant
+## Installing as an MCP Skill
 
-### Claude Desktop
+otel-collector-mcp exposes its tools via the MCP protocol over Streamable HTTP. Register it in your AI agent or IDE to give it access to OTel Collector diagnostics.
 
-To use otel-collector-mcp with Claude Desktop, first set up port-forwarding to the MCP server:
+### Port-Forward (for local access)
+
+If the MCP server is running in-cluster, set up port-forwarding:
 
 ```bash
 kubectl port-forward -n observability svc/otel-collector-mcp 8080:8080
 ```
 
-Then add the following to your Claude Desktop MCP configuration file (`claude_desktop_config.json`):
+For production use, consider [Gateway API exposure](#gateway-api-exposure) instead.
+
+### Claude Desktop
+
+Add the following to your `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "otel-collector-mcp": {
-      "url": "http://localhost:8080/mcp"
+      "url": "http://localhost:8080/mcp",
+      "transport": "streamable-http"
     }
   }
 }
 ```
 
-If you have multiple clusters, add one entry per cluster:
+For multiple clusters, add one entry per cluster:
 
 ```json
 {
   "mcpServers": {
     "otel-mcp-us-east": {
-      "url": "http://localhost:8080/mcp"
+      "url": "http://localhost:8080/mcp",
+      "transport": "streamable-http"
     },
     "otel-mcp-eu-west": {
-      "url": "http://localhost:8081/mcp"
+      "url": "http://localhost:8081/mcp",
+      "transport": "streamable-http"
     }
   }
 }
 ```
+
+### Cursor / VS Code
+
+Add to your workspace or user `settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "otel-collector-mcp": {
+        "url": "http://localhost:8080/mcp",
+        "transport": "streamable-http"
+      }
+    }
+  }
+}
+```
+
+### kagent (Kubernetes-native)
+
+Deploy as a Kubernetes-native MCP server resource:
+
+```yaml
+apiVersion: kagent.dev/v1alpha1
+kind: MCPServer
+metadata:
+  name: otel-collector-mcp
+spec:
+  url: "http://otel-collector-mcp.observability.svc:8080/mcp"
+  transport: streamable-http
+```
+
+### OpenClaw
+
+Add otel-collector-mcp as an MCP tool in your OpenClaw configuration, pointing to the `/mcp` endpoint with `streamable-http` transport.
 
 ### Other MCP Clients
 
@@ -235,6 +282,86 @@ helm install otel-collector-mcp deploy/helm/otel-collector-mcp \
 ```
 
 Every response from the MCP server includes the `cluster` field, allowing your AI assistant to distinguish which cluster a finding belongs to when you connect to multiple MCP servers simultaneously.
+
+## Enable Observability
+
+otel-collector-mcp can export its own traces, metrics, and logs via OTLP gRPC, following the [OTel GenAI + MCP semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/).
+
+### Via Helm values
+
+```yaml
+otel:
+  enabled: true
+  endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  insecure: true
+  serviceName: "otel-collector-mcp"
+```
+
+```bash
+helm install otel-collector-mcp deploy/helm/otel-collector-mcp \
+  --namespace observability \
+  --set otel.enabled=true \
+  --set otel.endpoint=otel-collector.observability.svc.cluster.local:4317
+```
+
+### Via environment variables
+
+```bash
+export OTEL_ENABLED=true
+export OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector.observability.svc.cluster.local:4317
+export OTEL_EXPORTER_OTLP_INSECURE=true
+export OTEL_SERVICE_NAME=otel-collector-mcp
+```
+
+### Minimal OTel Collector config to receive from this MCP server
+
+If you have an OTel Collector running in-cluster that will receive telemetry from otel-collector-mcp, here is a minimal config:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+
+processors:
+  batch:
+    send_batch_size: 8192
+    timeout: 200ms
+
+exporters:
+  # Replace with your backend exporter
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+```
+
+### Supported backends
+
+The OTLP gRPC output works with any OTel-compatible backend:
+
+- **Dynatrace** -- via Dynatrace OTLP endpoint or ActiveGate
+- **Grafana** -- Tempo (traces), Mimir (metrics), Loki (logs) via an OTel Collector
+- **Jaeger** -- native OTLP gRPC receiver on port 4317
+- **Datadog** -- via Datadog Agent OTLP ingestion
+- **New Relic** -- via OTLP endpoint
+- **Elastic / OpenSearch** -- via OTel Collector with appropriate exporters
+
+See the [Observability documentation](observability.md) for full details on spans, metrics, logs, and backend-specific configuration examples.
 
 ## Gateway API Exposure
 

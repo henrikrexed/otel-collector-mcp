@@ -53,6 +53,23 @@ docker run -p 8080:8080 ghcr.io/henrikrexed/otel-collector-mcp:latest
 | `design_architecture` | Get architecture recommendations (DaemonSet vs Deployment, Gateway pattern, etc.) |
 | `generate_ottl` | Generate OTTL expressions for common transformations |
 
+## Connect Your AI Agent
+
+Register otel-collector-mcp as an MCP skill in your AI agent:
+
+```json
+{
+  "mcpServers": {
+    "otel-collector-mcp": {
+      "url": "http://localhost:8080/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}
+```
+
+Works with Claude Desktop, Cursor, VS Code, kagent, and any MCP-compatible client. See the [Getting Started guide](https://henrikrexed.github.io/otel-collector-mcp/getting-started/) for full setup instructions including Cursor/VS Code, kagent (Kubernetes-native), and multi-cluster configurations.
+
 ## Observability
 
 The server produces OpenTelemetry traces, metrics, and logs following the [GenAI](https://opentelemetry.io/docs/specs/semconv/gen-ai/) and [MCP](https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/) semantic conventions.
