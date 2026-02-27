@@ -1,0 +1,71 @@
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: otel-collector-mcp
+spec:
+  category: observability
+  version: "0.1.0"
+  skills:
+    - name: troubleshoot-otel-collectors
+      description: Diagnose and analyze OpenTelemetry Collector deployments
+      content: |
+        # OpenTelemetry Collector Troubleshooting
+
+        You have access to an MCP server at http://localhost:8080/mcp that provides
+        OpenTelemetry Collector diagnostic tools. Use streamable-http transport.
+
+        ## Available Tools
+
+        - **triage_scan** — Run all 12 analyzers, return prioritized issue list
+        - **detect_deployment_type** — Identify collector deployment type (DaemonSet/Deployment/StatefulSet/Operator)
+        - **list_collectors** — Discover all collector instances in the cluster
+        - **get_config** — Retrieve running collector configuration
+        - **parse_collector_logs** — Analyze collector logs for OTTL errors, exporter failures, OOM
+        - **parse_operator_logs** — Check OTel Operator logs for rejected CRDs, reconciliation issues
+        - **check_config** — Full misconfiguration detection suite (12 rules)
+
+        ## Available Skills
+
+        - **design_architecture** — Get architecture recommendations (DaemonSet vs Deployment, Gateway pattern)
+        - **generate_ottl** — Generate OTTL expressions for common transformations
+
+        ## Triage Workflow
+
+        1. Start with `list_collectors` to discover all collector instances
+        2. Run `triage_scan` for a comprehensive health check
+        3. Use `get_config` to inspect specific collector configurations
+        4. Check `parse_collector_logs` for runtime errors
+        5. If using OTel Operator, check `parse_operator_logs`
+        6. For architecture questions, use `design_architecture`
+
+        ## Detection Rules
+
+        The server detects: missing batch processor, memory limiter gaps,
+        hardcoded tokens, wrong port bindings, tail sampling anti-patterns,
+        high cardinality attributes, and more.
+  sidecar:
+    image: ghcr.io/henrikrexed/otel-collector-mcp:0.0.1
+    command: ["/otel-collector-mcp"]
+    env:
+      - name: PORT
+        value: "8080"
+      - name: CLUSTER_NAME
+        value: "default"
+    mountWorkspace: true
+    resources:
+      cpu: "100m"
+      memory: "128Mi"
+    rbac:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "services", "configmaps", "events"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "daemonsets", "statefulsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["opentelemetry.io"]
+        resources: ["opentelemetrycollectors", "instrumentations"]
+        verbs: ["get", "list", "watch"]
+    clusterRBAC:
+      - apiGroups: [""]
+        resources: ["nodes", "namespaces"]
+        verbs: ["get", "list"]
