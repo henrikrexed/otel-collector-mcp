@@ -23,8 +23,8 @@ A Model Context Protocol (MCP) server for OpenTelemetry Collector troubleshootin
 ### Helm (recommended)
 
 ```bash
-helm repo add isitobservable https://henrikrexed.github.io/otel-collector-mcp
-helm install otel-collector-mcp isitobservable/otel-collector-mcp \
+helm repo add henrikrexed https://henrikrexed.github.io/otel-collector-mcp
+helm install otel-collector-mcp henrikrexed/otel-collector-mcp \
   --namespace tools --create-namespace
 ```
 
