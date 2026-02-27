@@ -327,7 +327,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	go func() {
 		<-ctx.Done()
 		slog.Info("shutting down MCP server")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second) //nolint:G118 // intentional: parent ctx is cancelled, need fresh context for graceful shutdown
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // #nosec G118 -- intentional: parent ctx is cancelled, need fresh context for graceful shutdown
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("MCP server shutdown error", "error", err)
