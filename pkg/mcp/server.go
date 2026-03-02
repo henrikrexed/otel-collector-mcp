@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -24,12 +27,11 @@ import (
 const (
 	AttrMCPMethodName       = "mcp.method.name"
 	AttrMCPProtocolVersion  = "mcp.protocol.version"
+	AttrMCPSessionID        = "mcp.session.id"
 	AttrGenAIToolName       = "gen_ai.tool.name"
 	AttrGenAIOperationName  = "gen_ai.operation.name"
 	AttrGenAIToolCallArgs   = "gen_ai.tool.call.arguments"
 	AttrGenAIToolCallResult = "gen_ai.tool.call.result"
-	AttrJSONRPCRequestID    = "jsonrpc.request.id"
-	AttrJSONRPCVersion      = "jsonrpc.protocol.version"
 	AttrErrorType           = "error.type"
 
 	MCPProtocolVersion = "2025-06-18"
@@ -37,37 +39,115 @@ const (
 	maxResultBytes     = 1024
 )
 
-// Server wraps the MCP tool registry and provides HTTP handlers.
+// sensitiveKeys are argument key substrings that should be redacted from span attributes.
+var sensitiveKeys = []string{"secret", "token", "key", "password", "credential"}
+
+const serviceName = "otel-collector-mcp"
+
+// Server wraps the MCP SDK server and provides OTel-instrumented tool execution.
 type Server struct {
-	registry *tools.Registry
-	mux      *http.ServeMux
-	ready    func() bool
-	tracer   trace.Tracer
-	metrics  *telemetry.Metrics
-	port     int
+	mcpServer  *mcpsdk.Server
+	httpServer *http.Server
+	registry   *tools.Registry
+	metrics    *telemetry.Metrics
+	ready      func() bool
+	port       int
+
+	mu              sync.Mutex
+	registeredTools map[string]struct{}
 }
 
 // NewServer creates a new MCP server with the given tool registry, readiness check, and port.
 func NewServer(registry *tools.Registry, readyFn func() bool, port int) *Server {
-	s := &Server{
-		registry: registry,
-		mux:      http.NewServeMux(),
-		ready:    readyFn,
-		tracer:   otel.Tracer(serviceName),
-		metrics:  telemetry.NewMetrics(),
-		port:     port,
+	mcpServer := mcpsdk.NewServer(&mcpsdk.Implementation{
+		Name:    serviceName,
+		Version: "1.0.0",
+	}, nil)
+
+	return &Server{
+		mcpServer:       mcpServer,
+		registry:        registry,
+		metrics:         telemetry.NewMetrics(),
+		ready:           readyFn,
+		port:            port,
+		registeredTools: make(map[string]struct{}),
 	}
-	s.mux.HandleFunc("/mcp", s.handleMCP)
-	s.mux.HandleFunc("/healthz", s.handleHealthz)
-	s.mux.HandleFunc("/readyz", s.handleReadyz)
-	return s
 }
 
-const serviceName = "otel-collector-mcp"
+// SyncTools diffs the registry against what is currently registered in the MCP server,
+// adding new tools and removing stale ones.
+func (s *Server) SyncTools() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-// Handler returns the HTTP handler for the server.
-func (s *Server) Handler() http.Handler {
-	return s.mux
+	allTools := s.registry.All()
+
+	// Build a set of tool names currently in the registry
+	wanted := make(map[string]struct{}, len(allTools))
+	for _, t := range allTools {
+		wanted[t.Name()] = struct{}{}
+	}
+
+	// Remove tools that are registered but no longer in the registry
+	var toRemove []string
+	for name := range s.registeredTools {
+		if _, ok := wanted[name]; !ok {
+			toRemove = append(toRemove, name)
+		}
+	}
+	if len(toRemove) > 0 {
+		s.mcpServer.RemoveTools(toRemove...)
+		for _, name := range toRemove {
+			delete(s.registeredTools, name)
+		}
+		slog.Info("mcp: removed tools", "tools", toRemove)
+	}
+
+	// Add tools that are in the registry but not yet registered
+	added := 0
+	for _, t := range allTools {
+		if _, ok := s.registeredTools[t.Name()]; ok {
+			continue
+		}
+		mcpTool := buildMCPTool(t)
+		handler := s.buildInstrumentedHandler(t)
+		s.mcpServer.AddTool(mcpTool, handler)
+		s.registeredTools[t.Name()] = struct{}{}
+		added++
+	}
+
+	slog.Info("mcp: synced tools", "total", len(s.registeredTools), "added", added, "removed", len(toRemove))
+}
+
+// Start begins serving the MCP Streamable HTTP protocol.
+func (s *Server) Start(addr string) error {
+	s.SyncTools()
+
+	handler := mcpsdk.NewStreamableHTTPHandler(func(r *http.Request) *mcpsdk.Server {
+		return s.mcpServer
+	}, nil)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", handler)
+	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/readyz", s.handleReadyz)
+
+	s.httpServer = &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	slog.Info("mcp: starting Streamable HTTP server", "addr", addr)
+	return s.httpServer.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer != nil {
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -85,162 +165,170 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprint(w, "ready")
 }
 
-// mcpRequest represents a simplified MCP tool call request.
-type mcpRequest struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Method  string    `json:"method"`
-	Params  mcpParams `json:"params"`
+func buildMCPTool(t tools.Tool) *mcpsdk.Tool {
+	schema := t.InputSchema()
+	schemaJSON, _ := json.Marshal(schema)
+
+	tool := &mcpsdk.Tool{
+		Name:        t.Name(),
+		Description: t.Description(),
+	}
+
+	if err := json.Unmarshal(schemaJSON, &tool.InputSchema); err != nil {
+		slog.Warn("mcp: failed to parse input schema", "tool", t.Name(), "error", err)
+	}
+
+	return tool
 }
 
-type mcpParams struct {
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Meta      map[string]interface{} `json:"_meta,omitempty"`
+// buildInstrumentedHandler creates a ToolHandler that wraps tool execution
+// with OTel spans, metrics, and context propagation per GenAI + MCP semantic conventions.
+func (s *Server) buildInstrumentedHandler(t tools.Tool) mcpsdk.ToolHandler {
+	tracer := otel.Tracer(serviceName)
+
+	return func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		// Context propagation: extract traceparent/tracestate from _meta
+		meta := request.Params.GetMeta()
+		if meta != nil {
+			carrier := propagation.MapCarrier{}
+			for k, v := range meta {
+				if str, ok := v.(string); ok {
+					carrier.Set(k, str)
+				}
+			}
+			ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
+		}
+
+		// Extract session ID
+		sessionID := ""
+		if request.Session != nil {
+			sessionID = request.Session.ID()
+		}
+
+		// Create server span with MCP semantic conventions
+		spanName := "execute_tool " + t.Name()
+		ctx, span := tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindServer))
+		defer span.End()
+
+		// Set GenAI + MCP span attributes
+		hostname, _ := os.Hostname()
+		span.SetAttributes(
+			attribute.String(AttrMCPMethodName, "tools/call"),
+			attribute.String(AttrGenAIToolName, t.Name()),
+			attribute.String(AttrGenAIOperationName, "execute_tool"),
+			attribute.String(AttrMCPProtocolVersion, MCPProtocolVersion),
+			attribute.String(AttrMCPSessionID, sessionID),
+			attribute.String("network.transport", "tcp"),
+			attribute.String("server.address", hostname),
+			attribute.Int("server.port", s.port),
+		)
+
+		// Unmarshal arguments
+		var args map[string]interface{}
+		if request.Params.Arguments != nil {
+			if err := json.Unmarshal(request.Params.Arguments, &args); err != nil {
+				s.recordError(ctx, span, t.Name(), "INVALID_INPUT", err)
+				return &mcpsdk.CallToolResult{
+					Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: fmt.Sprintf("failed to parse arguments: %v", err)}},
+					IsError: true,
+				}, nil
+			}
+		}
+		if args == nil {
+			args = make(map[string]interface{})
+		}
+
+		// Sanitized arguments as span attribute
+		span.SetAttributes(attribute.String(AttrGenAIToolCallArgs, sanitizeArgs(args)))
+
+		slog.InfoContext(ctx, "tool invoked", "tool", t.Name())
+
+		// Execute tool with timing
+		start := time.Now()
+		result, err := t.Run(ctx, args)
+		duration := time.Since(start).Seconds()
+
+		if err != nil {
+			errType := "tool_error"
+			if mcpErr, ok := err.(*types.MCPError); ok {
+				errType = mcpErr.Code
+			}
+			s.recordMetrics(ctx, t.Name(), errType, duration)
+			s.recordError(ctx, span, t.Name(), errType, err)
+
+			if mcpErr, ok := err.(*types.MCPError); ok {
+				errJSON, _ := json.MarshalIndent(mcpErr, "", "  ")
+				return &mcpsdk.CallToolResult{
+					Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(errJSON)}},
+					IsError: true,
+				}, nil
+			}
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: err.Error()}},
+				IsError: true,
+			}, nil
+		}
+
+		// Success metrics
+		s.recordMetrics(ctx, t.Name(), "", duration)
+		span.SetStatus(codes.Ok, "")
+
+		// Record findings as span events and metrics
+		s.recordFindings(ctx, span, result, t.Name())
+
+		// Marshal result
+		resultJSON, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			s.recordError(ctx, span, t.Name(), "INTERNAL_ERROR", err)
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: fmt.Sprintf("failed to marshal result: %v", err)}},
+				IsError: true,
+			}, nil
+		}
+
+		// Truncated result as span attribute
+		span.SetAttributes(attribute.String(AttrGenAIToolCallResult, truncateString(string(resultJSON), maxResultBytes)))
+
+		return &mcpsdk.CallToolResult{
+			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(resultJSON)}},
+		}, nil
+	}
 }
 
-// mcpResponse represents a simplified MCP tool call response.
-type mcpResponse struct {
-	Content []mcpContent `json:"content"`
-	IsError bool         `json:"isError,omitempty"`
-}
+// recordMetrics records GenAI request duration and count metrics.
+func (s *Server) recordMetrics(ctx context.Context, toolName, errType string, duration float64) {
+	toolAttr := attribute.String(AttrGenAIToolName, toolName)
 
-type mcpContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		s.handleToolList(w, r)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req mcpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("failed to decode MCP request", "error", err)
-		writeJSONError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.Method == "tools/list" {
-		s.handleToolList(w, r)
-		return
-	}
-
-	if req.Method != "tools/call" {
-		writeJSONError(w, fmt.Sprintf("unsupported method: %s", req.Method), http.StatusBadRequest)
-		return
-	}
-
-	tool := s.registry.Get(req.Params.Name)
-	if tool == nil {
-		slog.Warn("tool not found", "tool", req.Params.Name)
-		writeJSONError(w, fmt.Sprintf("tool not found: %s", req.Params.Name), http.StatusNotFound)
-		return
-	}
-
-	// Context propagation: extract traceparent/tracestate from _meta
-	ctx := r.Context()
-	if req.Params.Meta != nil {
-		carrier := extractMetaCarrier(req.Params.Meta)
-		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(carrier))
-	}
-
-	// Create server span with MCP semantic conventions
-	spanName := req.Method + " " + req.Params.Name
-	ctx, span := s.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindServer))
-	defer span.End()
-
-	// Required attributes
-	span.SetAttributes(
-		attribute.String(AttrMCPMethodName, req.Method),
-		attribute.String(AttrGenAIToolName, req.Params.Name),
-		attribute.String(AttrGenAIOperationName, "execute_tool"),
-		attribute.String(AttrMCPProtocolVersion, MCPProtocolVersion),
-	)
-
-	// Recommended attributes
-	jsonrpcVersion := req.JSONRPC
-	if jsonrpcVersion == "" {
-		jsonrpcVersion = "2.0"
-	}
-	hostname, _ := os.Hostname()
-	span.SetAttributes(
-		attribute.String(AttrJSONRPCRequestID, fmt.Sprintf("%v", req.ID)),
-		attribute.String(AttrJSONRPCVersion, jsonrpcVersion),
-		attribute.String("network.transport", "tcp"),
-		attribute.String("server.address", hostname),
-		attribute.Int("server.port", s.port),
-	)
-
-	// Opt-in: sanitized arguments
-	span.SetAttributes(attribute.String(AttrGenAIToolCallArgs, sanitizeArgs(req.Params.Arguments)))
-
-	slog.InfoContext(ctx, "tool invoked", "tool", req.Params.Name)
-
-	start := time.Now()
-	result, err := tool.Run(ctx, req.Params.Arguments)
-	duration := time.Since(start).Seconds()
-
-	// Record duration metric
-	toolAttr := attribute.String(AttrGenAIToolName, req.Params.Name)
 	if s.metrics.ToolRequestDuration != nil {
-		s.metrics.ToolRequestDuration.Record(ctx, duration, telemetry.WithAttributes(toolAttr))
+		attrs := []attribute.KeyValue{toolAttr}
+		if errType != "" {
+			attrs = append(attrs, attribute.String(AttrErrorType, errType))
+		}
+		s.metrics.ToolRequestDuration.Record(ctx, duration, telemetry.WithAttributes(attrs...))
 	}
 
-	if err != nil {
-		slog.ErrorContext(ctx, "tool execution failed", "tool", req.Params.Name, "error", err)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(AttrErrorType, "tool_error"))
-
-		if s.metrics.ToolRequestCount != nil {
-			s.metrics.ToolRequestCount.Add(ctx, 1, telemetry.WithAttributes(
-				toolAttr,
-				attribute.String(AttrErrorType, "tool_error"),
-			))
-		}
-		if s.metrics.ErrorsTotal != nil {
-			s.metrics.ErrorsTotal.Add(ctx, 1, telemetry.WithAttributes(
-				attribute.String(AttrErrorType, "tool_error"),
-			))
-		}
-
-		resp := mcpResponse{
-			Content: []mcpContent{{Type: "text", Text: err.Error()}},
-			IsError: true,
-		}
-		writeJSON(w, resp, http.StatusOK)
-		return
-	}
-
-	// Success path
 	if s.metrics.ToolRequestCount != nil {
-		s.metrics.ToolRequestCount.Add(ctx, 1, telemetry.WithAttributes(toolAttr))
+		attrs := []attribute.KeyValue{toolAttr}
+		if errType != "" {
+			attrs = append(attrs, attribute.String(AttrErrorType, errType))
+		}
+		s.metrics.ToolRequestCount.Add(ctx, 1, telemetry.WithAttributes(attrs...))
 	}
+}
 
-	// Record findings as span events and metrics
-	s.recordFindings(ctx, span, result, req.Params.Name)
+// recordError records error metrics and sets span error status.
+func (s *Server) recordError(ctx context.Context, span trace.Span, toolName, errType string, err error) {
+	slog.ErrorContext(ctx, "tool execution failed", "tool", toolName, "error", err)
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	span.SetAttributes(attribute.String(AttrErrorType, errType))
 
-	// Opt-in: truncated result
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to marshal tool result", "tool", req.Params.Name, "error", err)
-		writeJSONError(w, "internal error", http.StatusInternalServerError)
-		return
+	if s.metrics.ErrorsTotal != nil {
+		s.metrics.ErrorsTotal.Add(ctx, 1, telemetry.WithAttributes(
+			attribute.String(AttrErrorType, errType),
+			attribute.String(AttrGenAIToolName, toolName),
+		))
 	}
-	span.SetAttributes(attribute.String(AttrGenAIToolCallResult, truncateString(string(resultJSON), maxResultBytes)))
-
-	resp := mcpResponse{
-		Content: []mcpContent{{Type: "text", Text: string(resultJSON)}},
-	}
-	writeJSON(w, resp, http.StatusOK)
 }
 
 // recordFindings inspects the tool result for diagnostic findings and records them
@@ -282,7 +370,6 @@ func (s *Server) recordCollectorCount(ctx context.Context, result *types.Standar
 	if s.metrics.CollectorsDiscovered == nil {
 		return
 	}
-	// The Data field may be a map with a "collectors" slice
 	dataMap, ok := result.Data.(map[string]interface{})
 	if !ok {
 		return
@@ -296,85 +383,35 @@ func (s *Server) recordCollectorCount(ctx context.Context, result *types.Standar
 	}
 }
 
-func (s *Server) handleToolList(w http.ResponseWriter, _ *http.Request) {
-	type toolInfo struct {
-		Name        string                 `json:"name"`
-		Description string                 `json:"description"`
-		InputSchema map[string]interface{} `json:"inputSchema"`
-	}
-
-	allTools := s.registry.All()
-	toolList := make([]toolInfo, 0, len(allTools))
-	for _, t := range allTools {
-		toolList = append(toolList, toolInfo{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: t.InputSchema(),
-		})
-	}
-
-	writeJSON(w, map[string]interface{}{"tools": toolList}, http.StatusOK)
-}
-
-// ListenAndServe starts the MCP server, blocking until ctx is done.
-func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	go func() {
-		<-ctx.Done()
-		slog.Info("shutting down MCP server")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // #nosec G118 -- intentional: parent ctx is cancelled, need fresh context for graceful shutdown
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			slog.Error("MCP server shutdown error", "error", err)
-		}
-	}()
-
-	slog.Info("MCP server starting", "addr", addr)
-	return srv.ListenAndServe()
-}
-
-func writeJSON(w http.ResponseWriter, v interface{}, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("failed to encode JSON response", "error", err)
-	}
-}
-
-func writeJSONError(w http.ResponseWriter, msg string, status int) {
-	resp := mcpResponse{
-		Content: []mcpContent{{Type: "text", Text: msg}},
-		IsError: true,
-	}
-	writeJSON(w, resp, status)
-}
-
-// extractMetaCarrier converts the _meta map to a string-to-string map for trace propagation.
-func extractMetaCarrier(meta map[string]interface{}) map[string]string {
-	carrier := make(map[string]string, len(meta))
-	for k, v := range meta {
-		if s, ok := v.(string); ok {
-			carrier[k] = s
-		}
-	}
-	return carrier
-}
-
-// sanitizeArgs marshals tool arguments to JSON, truncating to maxArgBytes.
+// sanitizeArgs marshals tool arguments to JSON with sensitive values redacted, truncating to maxArgBytes.
 func sanitizeArgs(args map[string]interface{}) string {
 	if args == nil {
 		return "{}"
 	}
-	b, err := json.Marshal(args)
+	sanitized := make(map[string]interface{}, len(args))
+	for k, v := range args {
+		if isSensitiveKey(k) {
+			sanitized[k] = "[REDACTED]"
+		} else {
+			sanitized[k] = v
+		}
+	}
+	b, err := json.Marshal(sanitized)
 	if err != nil {
 		return "{}"
 	}
 	return truncateString(string(b), maxArgBytes)
+}
+
+// isSensitiveKey checks if a key name suggests it contains sensitive data.
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, s := range sensitiveKeys {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // truncateString truncates s to max bytes, appending "..." if truncated.

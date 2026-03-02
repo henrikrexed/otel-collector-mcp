@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hrexed/otel-collector-mcp/pkg/config"
 	"github.com/hrexed/otel-collector-mcp/pkg/discovery"
@@ -89,12 +91,29 @@ func main() {
 	// Start CRD discovery in background
 	go watcher.Start(ctx)
 
-	// Create and start MCP server
-	mcpServer := mcp.NewServer(registry, watcher.Features().IsReady, cfg.Port)
+	// Create MCP server (Streamable HTTP via official Go MCP SDK)
+	srv := mcp.NewServer(registry, watcher.Features().IsReady, cfg.Port)
 
-	addr := fmt.Sprintf(":%d", cfg.Port)
-	if err := mcpServer.ListenAndServe(ctx, addr); err != nil {
-		slog.Error("MCP server stopped", "error", err)
+	// Start MCP server in background
+	go func() {
+		addr := fmt.Sprintf(":%d", cfg.Port)
+		if err := srv.Start(addr); err != nil && err != http.ErrServerClosed {
+			slog.Error("MCP server error", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	slog.Info("server ready", "port", cfg.Port)
+
+	// Block until shutdown signal
+	<-ctx.Done()
+	slog.Info("shutting down")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("MCP server shutdown error", "error", err)
 	}
 
 	slog.Info("otel-collector-mcp stopped")
