@@ -77,7 +77,7 @@ func isTokenField(key string) bool {
 
 func isHardcoded(value string) bool {
 	// Not hardcoded if it uses env var substitution
-	if strings.HasPrefix(value, "${") && strings.Contains(value, "}") {
+	if strings.Contains(value, "${") && strings.Contains(value, "}") {
 		return false
 	}
 	// Not hardcoded if empty

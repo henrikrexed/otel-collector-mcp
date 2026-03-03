@@ -15,6 +15,11 @@ func AnalyzeMissingRetryQueue(_ context.Context, input *AnalysisInput) []types.D
 
 	var findings []types.DiagnosticFinding
 	for name, exporterCfg := range input.Config.Exporters {
+		// Skip exporters where retry/queue is not applicable
+		if isLocalExporter(name) {
+			continue
+		}
+
 		cfgMap, ok := exporterCfg.(map[string]interface{})
 		if !ok {
 			continue
@@ -57,4 +62,19 @@ func AnalyzeMissingRetryQueue(_ context.Context, input *AnalysisInput) []types.D
 		}
 	}
 	return findings
+}
+
+// isLocalExporter returns true for exporters that write locally (debug, logging, file/*)
+// where retry_on_failure and sending_queue are not meaningful.
+func isLocalExporter(name string) bool {
+	if name == "debug" || name == "logging" || name == "nop" {
+		return true
+	}
+	if len(name) > 5 && name[:5] == "file/" {
+		return true
+	}
+	if name == "file" {
+		return true
+	}
+	return false
 }
