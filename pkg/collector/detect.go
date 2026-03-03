@@ -26,12 +26,15 @@ const (
 
 // CollectorInstance represents a discovered collector in the cluster.
 type CollectorInstance struct {
-	Name           string         `json:"name"`
-	Namespace      string         `json:"namespace"`
-	DeploymentMode DeploymentMode `json:"deploymentMode"`
-	Version        string         `json:"version,omitempty"`
-	PodCount       int            `json:"podCount"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	Name            string            `json:"name"`
+	Namespace       string            `json:"namespace"`
+	DeploymentMode  DeploymentMode    `json:"deploymentMode"`
+	Version         string            `json:"version,omitempty"`
+	PodCount        int               `json:"podCount"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	ManagedBy       string            `json:"managedBy,omitempty"`
+	OperatorCRDName string            `json:"operatorCRDName,omitempty"`
+	ManagedWorkload string            `json:"managedWorkload,omitempty"`
 }
 
 // DetectDeploymentMode determines the deployment type of a collector workload.
@@ -89,9 +92,12 @@ func DetectDeploymentModeWithCRD(ctx context.Context, clientset kubernetes.Inter
 }
 
 // ListCollectors discovers all OTel Collector instances in the cluster.
+// When the OTel Operator is present, CRD entries are merged with the workloads
+// they manage (typically named <crd-name>-collector) so each collector appears
+// as a single entry with the correct pod count and operator metadata.
 func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClient dynamic.Interface, namespace string, hasOperator bool) ([]CollectorInstance, error) {
 	var collectors []CollectorInstance
-	seen := make(map[string]bool)
+	seen := make(map[string]int) // key -> index in collectors slice
 
 	listNS := namespace
 	// Empty namespace means all namespaces
@@ -107,8 +113,8 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 		for _, ds := range dsList.Items {
 			if isCollector(&ds.ObjectMeta) {
 				key := ds.Namespace + "/" + ds.Name
-				if !seen[key] {
-					seen[key] = true
+				if _, exists := seen[key]; !exists {
+					seen[key] = len(collectors)
 					collectors = append(collectors, CollectorInstance{
 						Name:           ds.Name,
 						Namespace:      ds.Namespace,
@@ -130,8 +136,8 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 		for _, dep := range depList.Items {
 			if isCollector(&dep.ObjectMeta) {
 				key := dep.Namespace + "/" + dep.Name
-				if !seen[key] {
-					seen[key] = true
+				if _, exists := seen[key]; !exists {
+					seen[key] = len(collectors)
 					collectors = append(collectors, CollectorInstance{
 						Name:           dep.Name,
 						Namespace:      dep.Namespace,
@@ -153,8 +159,8 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 		for _, ss := range ssList.Items {
 			if isCollector(&ss.ObjectMeta) {
 				key := ss.Namespace + "/" + ss.Name
-				if !seen[key] {
-					seen[key] = true
+				if _, exists := seen[key]; !exists {
+					seen[key] = len(collectors)
 					collectors = append(collectors, CollectorInstance{
 						Name:           ss.Name,
 						Namespace:      ss.Namespace,
@@ -168,7 +174,7 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 		}
 	}
 
-	// Search for Operator CRDs
+	// Search for Operator CRDs and merge with discovered workloads
 	if hasOperator {
 		gvr := schema.GroupVersionResource{
 			Group:    "opentelemetry.io",
@@ -180,14 +186,59 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 			slog.Warn("failed to list OpenTelemetryCollector CRDs", "error", err)
 		} else {
 			for _, item := range crdList.Items {
-				key := item.GetNamespace() + "/" + item.GetName()
-				if !seen[key] {
-					seen[key] = true
+				crdName := item.GetName()
+				crdNS := item.GetNamespace()
+
+				// Extract spec.mode from the CRD (e.g. "daemonset", "deployment", "statefulset")
+				crdMode := extractCRDSpecMode(item.Object)
+
+				// The operator creates workloads named <crd-name>-collector
+				workloadName := crdName + "-collector"
+				workloadKey := crdNS + "/" + workloadName
+
+				if idx, found := seen[workloadKey]; found {
+					// Workload already discovered — annotate it with operator metadata
+					collectors[idx].DeploymentMode = ModeOperatorCRD
+					collectors[idx].ManagedBy = "opentelemetry-operator"
+					collectors[idx].OperatorCRDName = crdName
+					collectors[idx].ManagedWorkload = workloadName
+					if crdMode != "" {
+						collectors[idx].Labels = mergeLabels(collectors[idx].Labels, "opentelemetry.io/spec-mode", crdMode)
+					}
+					// Also mark the CRD key as seen so we don't add a duplicate
+					crdKey := crdNS + "/" + crdName
+					seen[crdKey] = idx
+					continue
+				}
+
+				// Workload not yet seen — try to find it directly
+				inst, found := findOperatorWorkload(ctx, clientset, crdNS, workloadName)
+				if found {
+					inst.DeploymentMode = ModeOperatorCRD
+					inst.ManagedBy = "opentelemetry-operator"
+					inst.OperatorCRDName = crdName
+					inst.ManagedWorkload = workloadName
+					if crdMode != "" {
+						inst.Labels = mergeLabels(inst.Labels, "opentelemetry.io/spec-mode", crdMode)
+					}
+					seen[workloadKey] = len(collectors)
+					crdKey := crdNS + "/" + crdName
+					seen[crdKey] = len(collectors)
+					collectors = append(collectors, inst)
+					continue
+				}
+
+				// No matching workload — standalone CRD entry
+				crdKey := crdNS + "/" + crdName
+				if _, exists := seen[crdKey]; !exists {
+					seen[crdKey] = len(collectors)
 					collectors = append(collectors, CollectorInstance{
-						Name:           item.GetName(),
-						Namespace:      item.GetNamespace(),
-						DeploymentMode: ModeOperatorCRD,
-						Labels:         item.GetLabels(),
+						Name:            crdName,
+						Namespace:       crdNS,
+						DeploymentMode:  ModeOperatorCRD,
+						Labels:          item.GetLabels(),
+						ManagedBy:       "opentelemetry-operator",
+						OperatorCRDName: crdName,
 					})
 				}
 			}
@@ -195,6 +246,62 @@ func ListCollectors(ctx context.Context, clientset kubernetes.Interface, dynClie
 	}
 
 	return collectors, nil
+}
+
+// findOperatorWorkload checks DaemonSets, Deployments, and StatefulSets for
+// a workload with the given name and returns a CollectorInstance if found.
+func findOperatorWorkload(ctx context.Context, clientset kubernetes.Interface, namespace, name string) (CollectorInstance, bool) {
+	if ds, err := clientset.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return CollectorInstance{
+			Name:      ds.Name,
+			Namespace: ds.Namespace,
+			Version:   extractVersion(ds.Spec.Template.Spec.Containers),
+			PodCount:  int(ds.Status.NumberReady),
+			Labels:    ds.Labels,
+		}, true
+	}
+	if dep, err := clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return CollectorInstance{
+			Name:      dep.Name,
+			Namespace: dep.Namespace,
+			Version:   extractVersion(dep.Spec.Template.Spec.Containers),
+			PodCount:  int(dep.Status.ReadyReplicas),
+			Labels:    dep.Labels,
+		}, true
+	}
+	if ss, err := clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		return CollectorInstance{
+			Name:      ss.Name,
+			Namespace: ss.Namespace,
+			Version:   extractVersion(ss.Spec.Template.Spec.Containers),
+			PodCount:  int(ss.Status.ReadyReplicas),
+			Labels:    ss.Labels,
+		}, true
+	}
+	return CollectorInstance{}, false
+}
+
+// extractCRDSpecMode reads .spec.mode from an unstructured CRD object.
+func extractCRDSpecMode(obj map[string]interface{}) string {
+	spec, ok := obj["spec"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	mode, ok := spec["mode"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(mode)
+}
+
+// mergeLabels returns a copy of labels with the given key-value pair added.
+func mergeLabels(labels map[string]string, key, value string) map[string]string {
+	out := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		out[k] = v
+	}
+	out[key] = value
+	return out
 }
 
 func isCollector(meta *metav1.ObjectMeta) bool {
