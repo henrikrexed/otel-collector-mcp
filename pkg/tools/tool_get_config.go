@@ -2,11 +2,8 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/hrexed/otel-collector-mcp/pkg/collector"
 	"github.com/hrexed/otel-collector-mcp/pkg/types"
@@ -104,36 +101,7 @@ func (t *GetConfigTool) Run(ctx context.Context, args map[string]interface{}) (*
 	})
 }
 
-// getConfigFromCRD reads .spec.config from an OpenTelemetryCollector CR.
-func (t *GetConfigTool) getConfigFromCRD(ctx context.Context, namespace, name string) ([]byte, error) {
-	gvr := schema.GroupVersionResource{
-		Group:    "opentelemetry.io",
-		Version:  "v1beta1",
-		Resource: "opentelemetrycollectors",
-	}
 
-	obj, err := t.Clients.DynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		// Try v1alpha1
-		gvr.Version = "v1alpha1"
-		obj, err = t.Clients.DynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("OpenTelemetryCollector %s/%s not found: %w", namespace, name, err)
-		}
-	}
-
-	spec, ok := obj.Object["spec"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec", namespace, name)
-	}
-
-	configStr, ok := spec["config"].(string)
-	if !ok || configStr == "" {
-		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec.config", namespace, name)
-	}
-
-	return []byte(configStr), nil
-}
 
 // buildResponse parses raw config YAML and returns a StandardResponse.
 func (t *GetConfigTool) buildResponse(namespace string, rawConfig []byte, source *types.ResourceRef) (*types.StandardResponse, error) {
