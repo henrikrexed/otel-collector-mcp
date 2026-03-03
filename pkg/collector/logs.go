@@ -51,6 +51,7 @@ func FetchPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace
 
 	var lines []string
 	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB max line length
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
