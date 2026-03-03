@@ -2,7 +2,11 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/hrexed/otel-collector-mcp/pkg/collector"
 	"github.com/hrexed/otel-collector-mcp/pkg/types"
@@ -16,7 +20,7 @@ type GetConfigTool struct {
 func (t *GetConfigTool) Name() string { return "get_config" }
 
 func (t *GetConfigTool) Description() string {
-	return "Retrieve the running configuration of a detected OTel Collector instance"
+	return "Retrieve the running configuration of an OTel Collector instance from an Operator CRD (spec.config) or a ConfigMap. When collector_name is provided, the CRD is tried first; falls back to ConfigMap."
 }
 
 func (t *GetConfigTool) InputSchema() map[string]interface{} {
@@ -31,16 +35,54 @@ func (t *GetConfigTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Name of the ConfigMap containing the collector configuration",
 			},
+			"collector_name": map[string]interface{}{
+				"type":        "string",
+				"description": "Name of the OpenTelemetryCollector CR (optional). When provided, reads config from the CRD spec.config field first, falling back to ConfigMap.",
+			},
 		},
-		"required": []string{"namespace", "configmap"},
+		"required": []string{"namespace"},
 	}
 }
 
 func (t *GetConfigTool) Run(ctx context.Context, args map[string]interface{}) (*types.StandardResponse, error) {
 	namespace, _ := args["namespace"].(string)
 	configmap, _ := args["configmap"].(string)
+	collectorName, _ := args["collector_name"].(string)
 
-	slog.Info("retrieving collector config", "namespace", namespace, "configmap", configmap)
+	// Try CRD first when collector_name is provided
+	if collectorName != "" {
+		slog.Info("trying CRD config", "namespace", namespace, "collector", collectorName)
+
+		rawConfig, err := t.getConfigFromCRD(ctx, namespace, collectorName)
+		if err == nil {
+			return t.buildResponse(namespace, rawConfig, &types.ResourceRef{
+				Kind:      "OpenTelemetryCollector",
+				Namespace: namespace,
+				Name:      collectorName,
+			})
+		}
+		slog.Info("CRD config not found, falling back to ConfigMap", "error", err)
+	}
+
+	// Determine ConfigMap name: explicit > operator-derived > ""
+	if configmap == "" && collectorName != "" {
+		configmap = collectorName + "-collector"
+		slog.Info("using operator-derived ConfigMap name", "configmap", configmap)
+	}
+
+	if configmap == "" {
+		return types.NewStandardResponse(t.ClusterMeta(), t.Name(), &types.ToolResult{
+			Findings: []types.DiagnosticFinding{{
+				Severity:   types.SeverityWarning,
+				Category:   types.CategoryConfig,
+				Summary:    "No config source specified",
+				Detail:     "Provide either collector_name (for CRD) or configmap (for ConfigMap)",
+				Suggestion: "Use list_collectors to find the collector name, then pass it as collector_name.",
+			}},
+		}), nil
+	}
+
+	slog.Info("retrieving collector config from ConfigMap", "namespace", namespace, "configmap", configmap)
 
 	rawConfig, err := collector.GetCollectorConfig(ctx, t.Clients.Clientset, namespace, configmap)
 	if err != nil {
@@ -55,17 +97,59 @@ func (t *GetConfigTool) Run(ctx context.Context, args map[string]interface{}) (*
 		}), nil
 	}
 
+	return t.buildResponse(namespace, rawConfig, &types.ResourceRef{
+		Kind:      "ConfigMap",
+		Namespace: namespace,
+		Name:      configmap,
+	})
+}
+
+// getConfigFromCRD reads .spec.config from an OpenTelemetryCollector CR.
+func (t *GetConfigTool) getConfigFromCRD(ctx context.Context, namespace, name string) ([]byte, error) {
+	gvr := schema.GroupVersionResource{
+		Group:    "opentelemetry.io",
+		Version:  "v1beta1",
+		Resource: "opentelemetrycollectors",
+	}
+
+	obj, err := t.Clients.DynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		// Try v1alpha1
+		gvr.Version = "v1alpha1"
+		obj, err = t.Clients.DynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("OpenTelemetryCollector %s/%s not found: %w", namespace, name, err)
+		}
+	}
+
+	spec, ok := obj.Object["spec"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec", namespace, name)
+	}
+
+	configStr, ok := spec["config"].(string)
+	if !ok || configStr == "" {
+		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec.config", namespace, name)
+	}
+
+	return []byte(configStr), nil
+}
+
+// buildResponse parses raw config YAML and returns a StandardResponse.
+func (t *GetConfigTool) buildResponse(namespace string, rawConfig []byte, source *types.ResourceRef) (*types.StandardResponse, error) {
 	parsed, err := collector.ParseConfig(rawConfig)
 	if err != nil {
 		return types.NewStandardResponse(t.ClusterMeta(), t.Name(), map[string]interface{}{
 			"raw":        string(rawConfig),
 			"parsed":     nil,
 			"parseError": err.Error(),
+			"source":     source,
 		}), nil
 	}
 
 	return types.NewStandardResponse(t.ClusterMeta(), t.Name(), map[string]interface{}{
 		"raw":    string(rawConfig),
 		"parsed": parsed,
+		"source": source,
 	}), nil
 }
