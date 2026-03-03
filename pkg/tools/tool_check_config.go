@@ -33,12 +33,16 @@ func (t *CheckConfigTool) InputSchema() map[string]interface{} {
 				"type":        "string",
 				"description": "Name of the collector workload",
 			},
+			"collector_name": map[string]interface{}{
+				"type":        "string",
+				"description": "Name of the OpenTelemetryCollector CR (reads config from CRD spec.config)",
+			},
 			"configmap": map[string]interface{}{
 				"type":        "string",
-				"description": "Name of the ConfigMap containing collector configuration",
+				"description": "Name of the ConfigMap containing collector configuration (fallback if no CRD)",
 			},
 		},
-		"required": []string{"namespace", "name", "configmap"},
+		"required": []string{"namespace", "name"},
 	}
 }
 
@@ -46,8 +50,9 @@ func (t *CheckConfigTool) Run(ctx context.Context, args map[string]interface{}) 
 	namespace, _ := args["namespace"].(string)
 	name, _ := args["name"].(string)
 	configmap, _ := args["configmap"].(string)
+	collectorName, _ := args["collector_name"].(string)
 
-	slog.Info("running config check", "namespace", namespace, "name", name)
+	slog.Info("running config check", "namespace", namespace, "name", name, "collector_name", collectorName)
 
 	hasOperator := false
 	if t.HasOperator != nil {
@@ -60,8 +65,28 @@ func (t *CheckConfigTool) Run(ctx context.Context, args map[string]interface{}) 
 		mode = collector.ModeUnknown
 	}
 
-	// Get and parse config
-	rawConfig, err := collector.GetCollectorConfig(ctx, t.Clients.Clientset, namespace, configmap)
+	// Try CRD first when collector_name is provided
+	var rawConfig []byte
+	if collectorName != "" {
+		rawConfig, err = collector.GetConfigFromCRD(ctx, t.Clients.DynamicClient, namespace, collectorName)
+		if err != nil {
+			slog.Info("CRD config not found, falling back to ConfigMap", "error", err)
+		}
+	}
+
+	// Fall back to ConfigMap
+	if rawConfig == nil {
+		if configmap == "" && collectorName != "" {
+			configmap = collectorName + "-collector"
+		}
+		if configmap == "" {
+			configmap = name
+		}
+		rawConfig, err = collector.GetCollectorConfig(ctx, t.Clients.Clientset, namespace, configmap)
+	}
+	if rawConfig != nil {
+		err = nil
+	}
 	if err != nil {
 		return types.NewStandardResponse(t.ClusterMeta(), t.Name(), &types.ToolResult{
 			Findings: []types.DiagnosticFinding{{

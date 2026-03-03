@@ -53,7 +53,7 @@ func (t *GetConfigTool) Run(ctx context.Context, args map[string]interface{}) (*
 	if collectorName != "" {
 		slog.Info("trying CRD config", "namespace", namespace, "collector", collectorName)
 
-		rawConfig, err := t.getConfigFromCRD(ctx, namespace, collectorName)
+		rawConfig, err := collector.GetConfigFromCRD(ctx, t.Clients.DynamicClient, namespace, collectorName)
 		if err == nil {
 			return t.buildResponse(namespace, rawConfig, &types.ResourceRef{
 				Kind:      "OpenTelemetryCollector",

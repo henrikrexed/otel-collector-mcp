@@ -9,6 +9,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -180,4 +182,34 @@ func GetCollectorConfig(ctx context.Context, clientset kubernetes.Interface, nam
 	}
 
 	return nil, fmt.Errorf("no configuration data found in configmap %s/%s", namespace, configMapName)
+}
+
+// GetConfigFromCRD reads .spec.config from an OpenTelemetryCollector CR.
+func GetConfigFromCRD(ctx context.Context, dynClient dynamic.Interface, namespace, name string) ([]byte, error) {
+	gvr := schema.GroupVersionResource{
+		Group:    "opentelemetry.io",
+		Version:  "v1beta1",
+		Resource: "opentelemetrycollectors",
+	}
+
+	obj, err := dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		gvr.Version = "v1alpha1"
+		obj, err = dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("OpenTelemetryCollector %s/%s not found: %w", namespace, name, err)
+		}
+	}
+
+	spec, ok := obj.Object["spec"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec", namespace, name)
+	}
+
+	configStr, ok := spec["config"].(string)
+	if !ok || configStr == "" {
+		return nil, fmt.Errorf("OpenTelemetryCollector %s/%s has no spec.config", namespace, name)
+	}
+
+	return []byte(configStr), nil
 }
