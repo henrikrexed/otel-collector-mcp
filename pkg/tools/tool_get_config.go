@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-
 	"github.com/hrexed/otel-collector-mcp/pkg/collector"
 	"github.com/hrexed/otel-collector-mcp/pkg/types"
 )
@@ -101,23 +100,64 @@ func (t *GetConfigTool) Run(ctx context.Context, args map[string]interface{}) (*
 	})
 }
 
-
-
-// buildResponse parses raw config YAML and returns a StandardResponse.
+// buildResponse parses raw config YAML and returns a compact StandardResponse.
+// Returns a structured summary instead of the full raw config to reduce token usage.
 func (t *GetConfigTool) buildResponse(namespace string, rawConfig []byte, source *types.ResourceRef) (*types.StandardResponse, error) {
 	parsed, err := collector.ParseConfig(rawConfig)
 	if err != nil {
 		return types.NewStandardResponse(t.ClusterMeta(), t.Name(), map[string]interface{}{
-			"raw":        string(rawConfig),
-			"parsed":     nil,
 			"parseError": err.Error(),
 			"source":     source,
+			"configSize": len(rawConfig),
 		}), nil
 	}
 
-	return types.NewStandardResponse(t.ClusterMeta(), t.Name(), map[string]interface{}{
-		"raw":    string(rawConfig),
-		"parsed": parsed,
+	// Build compact summary: list receivers, processors, exporters, pipelines
+	summary := map[string]interface{}{
 		"source": source,
-	}), nil
+	}
+	if parsed.Receivers != nil {
+		names := make([]string, 0, len(parsed.Receivers))
+		for k := range parsed.Receivers {
+			names = append(names, k)
+		}
+		summary["receivers"] = names
+	}
+	if parsed.Processors != nil {
+		names := make([]string, 0, len(parsed.Processors))
+		for k := range parsed.Processors {
+			names = append(names, k)
+		}
+		summary["processors"] = names
+	}
+	if parsed.Exporters != nil {
+		names := make([]string, 0, len(parsed.Exporters))
+		for k := range parsed.Exporters {
+			names = append(names, k)
+		}
+		summary["exporters"] = names
+	}
+	if parsed.Connectors != nil {
+		names := make([]string, 0, len(parsed.Connectors))
+		for k := range parsed.Connectors {
+			names = append(names, k)
+		}
+		summary["connectors"] = names
+	}
+	if len(parsed.Service.Pipelines) > 0 && parsed.Service.Pipelines != nil {
+		pipelines := make(map[string]interface{})
+		for name, p := range parsed.Service.Pipelines {
+			pipelines[name] = map[string]interface{}{
+				"receivers":  p.Receivers,
+				"processors": p.Processors,
+				"exporters":  p.Exporters,
+			}
+		}
+		summary["pipelines"] = pipelines
+	}
+	if len(parsed.Service.Extensions) > 0 {
+		summary["extensions"] = parsed.Service.Extensions
+	}
+
+	return types.NewStandardResponse(t.ClusterMeta(), t.Name(), summary), nil
 }
