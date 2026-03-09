@@ -280,21 +280,14 @@ func (s *Server) buildInstrumentedHandler(t tools.Tool) mcpsdk.ToolHandler {
 		// Record findings as span events and metrics
 		s.recordFindings(ctx, span, result, t.Name())
 
-		// Marshal result
-		resultJSON, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			s.recordError(ctx, span, t.Name(), "INTERNAL_ERROR", err)
-			return &mcpsdk.CallToolResult{
-				Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: fmt.Sprintf("failed to marshal result: %v", err)}},
-				IsError: true,
-			}, nil
-		}
+		// Render as compact text for LLM token efficiency
+		resultText := result.ToText()
 
 		// Truncated result as span attribute
-		span.SetAttributes(attribute.String(AttrGenAIToolCallResult, truncateString(string(resultJSON), maxResultBytes)))
+		span.SetAttributes(attribute.String(AttrGenAIToolCallResult, truncateString(resultText, maxResultBytes)))
 
 		return &mcpsdk.CallToolResult{
-			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: string(resultJSON)}},
+			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: resultText}},
 		}, nil
 	}
 }
