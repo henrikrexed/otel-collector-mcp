@@ -28,3 +28,20 @@ rules:
     resources:
       - customresourcedefinitions
     verbs: ["get", "list", "watch"]
+  {{- if .Values.v2.enabled }}
+  # v2 write permissions for config mutation and rollback
+  - apiGroups: [""]
+    resources:
+      - configmaps
+    verbs: ["update", "patch"]
+  - apiGroups: ["opentelemetry.io"]
+    resources:
+      - opentelemetrycollectors
+    verbs: ["update", "patch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - daemonsets
+      - statefulsets
+    verbs: ["patch"]
+  {{- end }}

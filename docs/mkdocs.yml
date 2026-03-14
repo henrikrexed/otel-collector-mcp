@@ -18,9 +18,24 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - Tools Reference: tools/index.md
+  - Tools Reference:
+    - v1 Tools: tools/index.md
+    - v2 Tools: tools/v2-tools.md
   - Skills Reference: skills/index.md
   - Architecture Guide: architecture/index.md
+  - v2 Features:
+    - Getting Started with v2: guides/getting-started-v2.md
+    - Safety Model: guides/safety-model.md
+    - Detection Rules: guides/detection-rules.md
+    - Use Cases: guides/use-cases.md
+    - Migration Guide: v2/migration.md
+  - Integrations:
+    - Claude (Desktop & CLI): integrations/claude.md
+    - GitHub Copilot: integrations/github-copilot.md
+    - VS Code: integrations/vscode.md
+    - kagent: integrations/kagent.md
+    - HolmesGPT: integrations/holmesgpt.md
+    - Sympozium: integrations/sympozium.md
   - Observability: observability.md
   - Contributing: contributing.md
   - Troubleshooting: troubleshooting.md

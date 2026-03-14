@@ -38,6 +38,14 @@ spec:
               value: {{ .Values.otel.insecure | quote }}
             - name: OTEL_SERVICE_NAME
               value: {{ .Values.otel.serviceName | default (include "otel-collector-mcp.fullname" .) | quote }}
+            - name: V2_ENABLED
+              value: {{ .Values.v2.enabled | quote }}
+            {{- if .Values.v2.enabled }}
+            - name: V2_SESSION_TTL
+              value: {{ .Values.v2.sessionTTL | quote }}
+            - name: V2_MAX_SESSIONS
+              value: {{ .Values.v2.maxConcurrentSessions | quote }}
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

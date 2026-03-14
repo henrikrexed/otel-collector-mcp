@@ -14,6 +14,7 @@ import (
 	"github.com/hrexed/otel-collector-mcp/pkg/discovery"
 	"github.com/hrexed/otel-collector-mcp/pkg/k8s"
 	"github.com/hrexed/otel-collector-mcp/pkg/mcp"
+	"github.com/hrexed/otel-collector-mcp/pkg/session"
 	"github.com/hrexed/otel-collector-mcp/pkg/telemetry"
 	"github.com/hrexed/otel-collector-mcp/pkg/tools"
 )
@@ -27,6 +28,7 @@ func main() {
 		"port", cfg.Port,
 		"clusterName", cfg.ClusterName,
 		"otelEnabled", cfg.OTelEnabled,
+		"v2Enabled", cfg.V2Enabled,
 	)
 
 	// Create context with signal handling
@@ -87,6 +89,15 @@ func main() {
 	// Register analysis tools
 	registry.Register(&tools.TriageScanTool{BaseTool: baseTool, HasOperator: hasOperator})
 	registry.Register(&tools.CheckConfigTool{BaseTool: baseTool, HasOperator: hasOperator})
+
+	// Conditionally register v2 tools
+	if cfg.V2Enabled {
+		sessionMgr := session.NewManager(cfg.SessionTTL, cfg.MaxConcurrentSessions)
+		go sessionMgr.StartCleanupLoop(ctx)
+		tools.RegisterV2Tools(registry, baseTool, sessionMgr)
+	} else {
+		slog.Info("v2 tools disabled", "V2_ENABLED", false)
+	}
 
 	// Start CRD discovery in background
 	go watcher.Start(ctx)

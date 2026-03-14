@@ -1,0 +1,105 @@
+# generated: 2026-03-14
+# project: otel-collector-mcp v2
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Mark epic as 'in-progress' when starting work on its first story
+# - SM typically creates next story ONLY after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then Dev runs code-review (fresh context, ideally different LLM)
+
+generated: 2026-03-14
+project: otel-collector-mcp v2
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: v2 Foundation & Backward Compatibility
+  epic-1: done
+  1-1-v2-configuration-and-error-codes: done
+  1-2-feature-gated-v2-tool-registration: done
+  1-3-feature-gated-helm-chart-rbac: done
+  epic-1-retrospective: optional
+
+  # Epic 2: Collector Health Monitoring
+  epic-2: done
+  2-1-health-check-core-logic: done
+  2-2-check-health-mcp-tool: done
+  epic-2-retrospective: optional
+
+  # Epic 3: Session Management & Safety Model
+  epic-3: done
+  3-1-mutator-interface-and-configmap-mutator: done
+  3-2-crd-mutator: done
+  3-3-safety-chain-with-health-gated-auto-rollback: done
+  3-4-session-manager: done
+  3-5-start-analysis-tool: done
+  3-6-rollback-config-tool: done
+  epic-3-retrospective: optional
+
+  # Epic 4: Dynamic Signal Capture
+  epic-4: done
+  4-1-debug-exporter-injection-and-removal: done
+  4-2-signal-parser: done
+  4-3-capture-signals-tool: done
+  4-4-cleanup-debug-tool: done
+  4-5-session-ttl-auto-cleanup-and-orphan-recovery: done
+  epic-4-retrospective: optional
+
+  # Epic 5: Runtime Issue Detection
+  epic-5: done
+  5-1-runtime-analyzer-framework-and-high-cardinality-detection: done
+  5-2-pii-detection-with-false-positive-exclusion: done
+  5-3-orphan-span-and-bloated-attribute-detection: done
+  5-4-missing-resource-attributes-and-duplicate-signal-detection: done
+  5-5-missing-sampling-and-resource-sizing-detection: done
+  5-6-detect-issues-tool: done
+  epic-5-retrospective: optional
+
+  # Epic 6: Fix Suggestion & Application
+  epic-6: done
+  6-1-fix-generator-framework-and-cardinality-fix: done
+  6-2-pii-redaction-and-missing-resource-fixes: done
+  6-3-bloated-attribute-and-duplicate-signal-fixes: done
+  6-4-suggest-fixes-tool: done
+  6-5-apply-fix-tool: done
+  epic-6-retrospective: optional
+
+  # Epic 7: Sampling & Sizing Recommendations
+  epic-7: done
+  7-1-recommend-sampling-tool: done
+  7-2-recommend-sizing-tool: done
+  epic-7-retrospective: optional
+
+  # Epic 8: v2 Self-Instrumentation
+  epic-8: done
+  8-1-v2-metrics-instruments: done
+  8-2-v2-spans-child-spans-and-structured-mutation-logging: done
+  epic-8-retrospective: optional
+
+  # Epic 9: v2 Documentation
+  epic-9: done
+  9-1-v2-tool-reference-and-safety-model-guide: done
+  9-2-migration-guide-and-detection-rules-reference: done
+  epic-9-retrospective: optional

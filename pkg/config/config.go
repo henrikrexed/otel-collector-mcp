@@ -4,17 +4,21 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/hrexed/otel-collector-mcp/pkg/types"
 )
 
 // Config holds server configuration read from environment variables.
 type Config struct {
-	Port         int
-	LogLevel     string
-	ClusterName  string
-	OTelEnabled  bool
-	OTelEndpoint string
+	Port                  int
+	LogLevel              string
+	ClusterName           string
+	OTelEnabled           bool
+	OTelEndpoint          string
+	V2Enabled             bool
+	SessionTTL            time.Duration
+	MaxConcurrentSessions int
 }
 
 // NewFromEnv creates a Config by reading environment variables with defaults.
@@ -46,12 +50,45 @@ func NewFromEnv() *Config {
 		otelEndpoint = os.Getenv("OTEL_ENDPOINT")
 	}
 
+	v2Enabled := false
+	if v := os.Getenv("V2_ENABLED"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			slog.Warn("invalid V2_ENABLED value, defaulting to false")
+		} else {
+			v2Enabled = parsed
+		}
+	}
+
+	sessionTTL := 10 * time.Minute
+	if v := os.Getenv("V2_SESSION_TTL"); v != "" {
+		parsed, err := time.ParseDuration(v)
+		if err != nil {
+			slog.Warn("invalid V2_SESSION_TTL value, defaulting to 10m")
+		} else {
+			sessionTTL = parsed
+		}
+	}
+
+	maxSessions := 5
+	if v := os.Getenv("V2_MAX_SESSIONS"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			slog.Warn("invalid V2_MAX_SESSIONS value, defaulting to 5")
+		} else {
+			maxSessions = parsed
+		}
+	}
+
 	return &Config{
-		Port:         port,
-		LogLevel:     logLevel,
-		ClusterName:  os.Getenv("CLUSTER_NAME"),
-		OTelEnabled:  otelEnabled,
-		OTelEndpoint: otelEndpoint,
+		Port:                  port,
+		LogLevel:              logLevel,
+		ClusterName:           os.Getenv("CLUSTER_NAME"),
+		OTelEnabled:           otelEnabled,
+		OTelEndpoint:          otelEndpoint,
+		V2Enabled:             v2Enabled,
+		SessionTTL:            sessionTTL,
+		MaxConcurrentSessions: maxSessions,
 	}
 }
 

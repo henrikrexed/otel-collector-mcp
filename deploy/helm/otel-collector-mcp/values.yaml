@@ -11,6 +11,11 @@ config:
   clusterName: ""
   logLevel: info
 
+v2:
+  enabled: false
+  sessionTTL: "10m"
+  maxConcurrentSessions: 5
+
 otel:
   enabled: false
   endpoint: "otel-collector.observability.svc.cluster.local:4317"
