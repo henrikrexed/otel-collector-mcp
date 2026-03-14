@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -180,22 +179,4 @@ func NewMutator(clientset kubernetes.Interface, ref CollectorRef) Mutator {
 		return NewCRDMutator(clientset, ref)
 	}
 	return NewConfigMapMutator(clientset, ref)
-}
-
-// newFakeConfigMap creates a ConfigMap for testing purposes (exported for test use).
-func newFakeConfigMap(name, namespace, configKey, configData string, annotations map[string]string) *corev1.ConfigMap {
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			Annotations: annotations,
-		},
-		Data: map[string]string{
-			configKey: configData,
-		},
-	}
-	if cm.Annotations == nil {
-		cm.Annotations = make(map[string]string)
-	}
-	return cm
 }
